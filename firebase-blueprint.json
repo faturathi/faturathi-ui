@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "Invoice": {
+      "title": "E-Invoice Document",
+      "description": "PINT-OM compliant electronic invoice document for Oman Tax Authority",
+      "type": "object",
+      "properties": {
+        "n": { "type": "string", "description": "Invoice number" },
+        "d": { "type": "string", "description": "Issue date YYYY-MM-DD" },
+        "t": { "type": "string", "description": "Issue time HH:MM:SS" },
+        "type": { "type": "string", "description": "Invoice type description" },
+        "dir": { "type": "string", "description": "Direction: Outbound (AR) or Inbound (AP)" },
+        "cp": { "type": "string", "description": "Counterparty legal name" },
+        "cpv": { "type": "string", "description": "Counterparty VATIN" },
+        "eas": { "type": "string", "description": "Counterparty Peppol Endpoint ID" },
+        "net": { "type": "number", "description": "Net amount OMR" },
+        "vat": { "type": "number", "description": "VAT amount OMR" },
+        "st": { "type": "string", "description": "Status: Reported, Pending, Sent, Rejected, Draft" },
+        "tdd": { "type": "string", "description": "TDD transmission status" },
+        "tt": { "type": "string", "description": "20-bit Oman Transaction Bitmap" },
+        "uuid": { "type": "string", "description": "RFC 4122 v5 UUID" },
+        "cat": { "type": "string", "description": "VAT category code (S 5%, Z 0%, E Exempt)" },
+        "ent": { "type": "string", "description": "Entity ID (e.g. E1, E2, E3)" },
+        "sVat": { "type": "string", "description": "Seller VATIN" },
+        "erpSystem": { "type": "string", "description": "Source ERP system name" },
+        "sourceChannel": { "type": "string", "description": "Ingestion source channel" },
+        "err": { "type": "string", "description": "Validation error details if rejected" }
+      },
+      "required": ["n", "d", "type", "net", "vat", "st"]
+    },
+    "Entity": {
+      "title": "Legal Tenant Entity",
+      "description": "Corporate legal entity participating in Faturathi Peppol network",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Entity internal ID" },
+        "name": { "type": "string", "description": "Company Legal Name" },
+        "vatin": { "type": "string", "description": "Oman Tax Authority VATIN" },
+        "pid": { "type": "string", "description": "Peppol Participant Endpoint ID" },
+        "prefixes": { "type": "array", "description": "Invoice number prefixes" },
+        "status": { "type": "string", "description": "Registration Status" }
+      },
+      "required": ["id", "name", "vatin", "pid"]
+    },
+    "User": {
+      "title": "User Account",
+      "description": "Faturathi user profile with role-based access control",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User ID" },
+        "email": { "type": "string", "description": "Email address" },
+        "role": { "type": "string", "description": "User role: Super Admin, Finance Manager, Invoice Clerk, Auditor" },
+        "branch": { "type": "string", "description": "Assigned branch or entity" },
+        "mfa": { "type": "boolean", "description": "MFA enabled flag" },
+        "status": { "type": "string", "description": "Account status" }
+      },
+      "required": ["id", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "Collection of e-invoices"
+    },
+    "/entities/{entityId}": {
+      "schema": { "$ref": "#/entities/Entity" },
+      "description": "Collection of corporate entities"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Collection of user accounts"
+    }
+  }
+}

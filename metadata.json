@@ -1,0 +1,8 @@
+{
+  "name": "Faturathi E-invoice Application",
+  "description": "Live E-Invoicing Solution Provided by Netbue LLC for PINT Oman Specific Invoicing. ",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
