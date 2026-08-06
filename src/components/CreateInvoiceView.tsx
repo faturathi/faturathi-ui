@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Invoice } from '../types';
+import { apiFetch } from '../lib/api';
+import { useConfirmation } from './ConfirmationDialog';
 import { validateOmanInvoice, OMAN_FIELDS } from '../lib/omanValidator';
 import { 
   CheckCircle2, 
@@ -22,7 +24,7 @@ import {
 } from 'lucide-react';
 
 interface CreateInvoiceViewProps {
-  onSubmitInvoice: (inv: any) => void;
+  onSubmitInvoice: (inv: any, validateAndSubmit?: boolean) => Promise<Invoice>;
 }
 
 const INVALID_COMBOS: [number, number, string][] = [
@@ -42,9 +44,43 @@ interface QuickLineItem {
   vatCat: string; // 'S 5%', 'Z 0%', 'E Exempt'
 }
 
+type QuickDocumentTypeValue = '380' | '388' | '381' | '383' | '389' | '261';
+type DocumentTypeOption = { value: QuickDocumentTypeValue; icon: string; label: string; detail: string; apiKey: string };
+
+const QUICK_DOCUMENT_TYPES: DocumentTypeOption[] = [
+  { value: '380', icon: '📄', label: 'Standard Tax Invoice', detail: 'Code 380', apiKey: 'STANDARD_380' },
+  { value: '388', icon: '🛒', label: 'Simplified Tax Invoice', detail: 'B2C profile', apiKey: 'SIMPLIFIED_B2C' },
+  { value: '381', icon: '💳', label: 'Credit Note', detail: 'Code 381', apiKey: 'CREDIT_NOTE_381' },
+  { value: '383', icon: '✚', label: 'Debit Note', detail: 'Code 383', apiKey: 'DEBIT_NOTE_383' },
+  { value: '389', icon: '📑', label: 'Self-Billed Invoice', detail: 'Code 389', apiKey: 'SELF_BILLED_389' },
+  { value: '261', icon: '↩️', label: 'Self-Billed Credit Note', detail: 'Code 261', apiKey: 'SELF_BILLED_CN_261' },
+];
+
+const TYPE_ICONS: Record<string, string> = {
+  STANDARD_380: '📄', SIMPLIFIED_B2C: '🛒', CREDIT_NOTE_381: '💳',
+  DEBIT_NOTE_383: '✚', SELF_BILLED_389: '📑', SELF_BILLED_CN_261: '↩️',
+};
+
 export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitInvoice }) => {
+  const [confirmAction, confirmationDialog] = useConfirmation();
   // Section toggle: 'quick' (Zoho Books style) vs 'technical' (73-field PINT-OM validator)
   const [activeCreationMode, setActiveCreationMode] = useState<'quick' | 'technical'>('quick');
+  const [quickDocumentType, setQuickDocumentType] = useState<QuickDocumentTypeValue>('380');
+  const [documentTypeOptions, setDocumentTypeOptions] = useState<DocumentTypeOption[]>(QUICK_DOCUMENT_TYPES);
+  const [quickBillingReference, setQuickBillingReference] = useState('');
+  const [quickAdjustmentReason, setQuickAdjustmentReason] = useState('01 — Return of goods / price adjustment');
+  const [quickApiErrors, setQuickApiErrors] = useState<string[]>([]);
+  const [isSavingQuickDocument, setIsSavingQuickDocument] = useState(false);
+
+  useEffect(() => {
+    void apiFetch<Array<{ key: string; code: string; label: string; sublabel: string }>>('/api/document-types')
+      .then((catalog) => setDocumentTypeOptions(catalog.map((item) => ({
+        value: (item.key === 'SIMPLIFIED_B2C' ? '388' : item.code) as QuickDocumentTypeValue,
+        icon: TYPE_ICONS[item.key] || '📄', label: item.label,
+        detail: item.key === 'SIMPLIFIED_B2C' ? 'B2C profile' : `Code ${item.code}`, apiKey: item.key,
+      }))))
+      .catch(() => setDocumentTypeOptions(QUICK_DOCUMENT_TYPES));
+  }, []);
 
   // ==================== QUICK INVOICE STATE ====================
   // Default option is "Custom / Walk-in Customer"
@@ -158,8 +194,10 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   const quickVatTotal = quickLines.reduce((acc, l) => acc + (l.qty * l.price * l.vatRate), 0);
   const quickGrandTotal = quickSubtotalNet + quickVatTotal;
 
-  const handleQuickSubmit = (e: React.FormEvent, isDirectDispatch = false) => {
+  const handleQuickSubmit = async (e: React.FormEvent, isDirectDispatch = false) => {
     e.preventDefault();
+    setQuickApiErrors([]);
+    setIsSavingQuickDocument(true);
     const formattedLines: [string, number, string, string][] = quickLines.map(l => [
       l.name,
       l.qty,
@@ -169,27 +207,44 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
 
     const fullInvNum = getQuickFullInvNumber();
 
+    const typeLabels: Record<string, string> = {
+      '380': 'Standard Invoice', '388': 'Simplified Invoice', '381': 'Credit Note',
+      '383': 'Debit Note', '389': 'Self-Billed Invoice', '261': 'Self-Billed Credit Note'
+    };
+    const selectedType = documentTypeOptions.find((item) => item.value === quickDocumentType) || QUICK_DOCUMENT_TYPES[0];
     const newInv = {
       n: fullInvNum,
       d: quickIssueDate,
       t: '10:00:00',
-      type: 'Full Tax Invoice (380/388)',
-      dir: 'Outbound (AR)',
+      type: typeLabels[quickDocumentType],
+      document_type: selectedType.apiKey,
+      doc_type: quickDocumentType === '388' ? '380' : quickDocumentType,
+      billingReferenceNumber: quickBillingReference || undefined,
+      notes: ['381', '383', '261'].includes(quickDocumentType) ? quickAdjustmentReason : '',
+      dir: ['389', '261'].includes(quickDocumentType) ? 'Inbound (AP)' : 'Outbound (AR)',
       cp: quickBuyerName || 'Custom Walk-in Retail Customer',
       cpv: quickBuyerVat || 'OM1100998877',
       eas: quickBuyerEas,
       net: quickSubtotalNet,
       vat: quickVatTotal,
-      st: isDirectDispatch ? 'Reported' : 'Draft (Pending Review)',
-      tdd: isDirectDispatch ? 'Submit · Ack' : 'Pending Approver Review',
-      tt: '10000000000000000000',
+      st_internal: 'DRAFT',
+      tt: quickDocumentType === '388' ? '11000000000000000000' : ['381', '383', '261'].includes(quickDocumentType) ? '10100000000000000000' : '10000000000000000000',
       cat: quickLines[0]?.vatCat || 'S 5%',
       ent: 'E1',
       lines: formattedLines,
-      b2c: quickBuyerOption === 'custom'
+      b2c: quickDocumentType === '388'
     };
-
-    onSubmitInvoice(newInv);
+    try {
+      if (isDirectDispatch && !await confirmAction({ title: 'Submit document to Peppol?', description: `${newInv.type} · ${newInv.n}`, detail: 'After successful transmission, this document cannot be edited or deleted. Verify the customer, tax totals, document profile, and line items.', confirmLabel: 'Submit to Peppol', kind: 'submit' })) return;
+      await onSubmitInvoice(newInv, isDirectDispatch);
+    } catch (error: any) {
+      const fieldErrors = error?.payload && typeof error.payload === 'object'
+        ? Object.entries(error.payload).flatMap(([field, messages]) => (Array.isArray(messages) ? messages : [messages]).map((message) => `${field}: ${String(message)}`))
+        : error?.fieldErrors?.map((item: any) => `${item.field}: ${item.message}`) || [error?.message || 'Document creation failed.'];
+      setQuickApiErrors(fieldErrors);
+    } finally {
+      setIsSavingQuickDocument(false);
+    }
   };
 
   // ==================== TECHNICAL 73-FIELD ENGINE STATE ====================
@@ -503,26 +558,34 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
     }
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
     if (!validationResult || !validationResult.isValid) return;
 
     const lineNet = itemQty * itemPrice;
     const vatRate = itemCat === 'S' ? 0.05 : 0;
     const vatAmt = lineNet * vatRate;
 
+    const technicalTypes: Record<string, { label: string; code: string }> = {
+      full: { label: 'Standard Invoice', code: '380' }, simplified: { label: 'Simplified Invoice', code: '380' },
+      cn: { label: 'Credit Note', code: '381' }, dn: { label: 'Debit Note', code: '383' },
+      sbi: { label: 'Self-Billed Invoice', code: '389' }, sbcn: { label: 'Self-Billed Credit Note', code: '261' },
+      sbdn: { label: 'Self-Billed Debit Note', code: '383' }
+    };
+    const selectedType = technicalTypes[docType] || technicalTypes.full;
     const newInv = {
       n: invNum,
       d: issueDate,
       t: issueTime,
-      type: docType === 'simplified' ? 'Simplified Invoice — B2C' : 'Full Tax Invoice (380/388)',
+      type: selectedType.label,
+      doc_type: selectedType.code,
+      billingReferenceNumber: ['cn', 'dn', 'sbcn', 'sbdn'].includes(docType) ? cnRef : undefined,
       dir: 'Outbound (AR)',
       cp: buyerName,
       cpv: buyerVat,
       eas: buyerEas,
       net: lineNet,
       vat: vatAmt,
-      st: 'Reported',
-      tdd: 'Submit · Ack',
+      st_internal: 'DRAFT',
       tt: bitmapString,
       cat: itemCat === 'S' ? 'S 5%' : 'Z 0%',
       ent: 'E1',
@@ -530,11 +593,19 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
       b2c: docType === 'simplified'
     };
 
-    onSubmitInvoice(newInv);
+    try {
+      if (!await confirmAction({ title: 'Submit document to Peppol?', description: `${newInv.type} · ${newInv.n}`, detail: 'After successful transmission, this document cannot be edited or deleted. Corrections require the formal credit/debit note workflow.', confirmLabel: 'Submit to Peppol', kind: 'submit' })) return;
+      await onSubmitInvoice(newInv, true);
+    } catch (error: any) {
+      const errors: [string, string][] = error?.fieldErrors?.map((item: any) => [item.field || 'API', item.message])
+        || [['API', error?.message || 'Document submission failed.']];
+      setValidationResult({ isValid: false, errors });
+    }
   };
 
   return (
     <div className="space-y-6">
+      {confirmationDialog}
       {/* Creation Mode Segment Toggle Bar */}
       <div className="bg-white p-3 rounded-3xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-xs w-full sm:w-auto">
@@ -596,6 +667,90 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
               Auto 5% Oman VAT
             </span>
           </div>
+
+          <section className="rounded-3xl border-2 border-slate-300 bg-slate-100/80 p-4 text-xs shadow-inner sm:p-5">
+            <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <FileText className="h-5 w-5 text-[#0d4f8b]" />
+                <h3 className="text-base font-black text-slate-950">Select Document Type:</h3>
+                <span className="rounded-lg bg-[#0d4f8b] px-3 py-1 font-mono text-[11px] font-bold text-white">
+                  {quickDocumentType === '388' ? 'PINT-OM B2C Profile' : `UNCL1001 Code: ${quickDocumentType}`}
+                </span>
+              </div>
+              <span className="font-medium text-slate-500">PINT-OM e-Invoicing Specification Compliant</span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2.5 md:grid-cols-3 xl:grid-cols-6" role="radiogroup" aria-label="Document type">
+              {documentTypeOptions.map((option) => {
+                const selected = option.value === quickDocumentType;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => { setQuickDocumentType(option.value); setQuickApiErrors([]); }}
+                    className={`relative min-h-28 rounded-2xl border p-4 text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      selected
+                        ? 'border-blue-300 bg-[#155b96] text-white shadow-lg ring-2 ring-blue-300'
+                        : 'border-slate-200 bg-white text-slate-950 shadow-sm hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md'
+                    }`}
+                  >
+                    <span className="block text-xl" aria-hidden="true">{option.icon}</span>
+                    {selected ? <CheckCircle2 className="absolute right-3 top-3 h-5 w-5 text-blue-100" aria-hidden="true" /> : null}
+                    <span className="mt-3 block text-sm font-black leading-tight">{option.label}</span>
+                    <span className={`mt-1 block font-mono text-[11px] ${selected ? 'text-blue-100' : 'text-slate-500'}`}>{option.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <label htmlFor="quick-document-type" className="shrink-0 font-bold text-slate-700">Document Type Selector:</label>
+              <select
+                id="quick-document-type"
+                value={quickDocumentType}
+                onChange={(e) => { setQuickDocumentType(e.target.value as typeof quickDocumentType); setQuickApiErrors([]); }}
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+              >
+                {documentTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label} — {option.detail}</option>)}
+              </select>
+            </div>
+            {['381', '383', '261'].includes(quickDocumentType) ? (
+              <div className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-amber-300 bg-amber-50/80 p-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-black text-amber-950">Preceding Invoice Reference (BT-25) *</label>
+                  <input
+                    required
+                    value={quickBillingReference}
+                    onChange={(e) => setQuickBillingReference(e.target.value)}
+                    placeholder="INV-2026-Q-9900/OM"
+                    className="w-full rounded-xl border border-amber-400 bg-white px-3 py-2.5 font-mono text-sm font-bold outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-100"
+                  />
+                  <span className="mt-1 block text-[11px] font-medium text-amber-800">Mandatory for Credit/Debit Notes under Oman Tax Law</span>
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-black text-amber-950">Adjustment Reason / Explanation *</label>
+                  <input
+                    required
+                    value={quickAdjustmentReason}
+                    onChange={(e) => setQuickAdjustmentReason(e.target.value)}
+                    placeholder="Explain why this corrective document is being issued"
+                    className="w-full rounded-xl border border-amber-400 bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-100"
+                  />
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          {quickApiErrors.length ? (
+            <div role="alert" className="rounded-2xl border border-red-300 bg-red-50 p-4 text-xs text-red-900">
+              <b className="block text-sm">Document could not be processed</b>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {quickApiErrors.map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </div>
+          ) : null}
 
           {/* Customer & Invoice Header Details */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
@@ -877,19 +1032,21 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
             <button
               type="button"
               onClick={(e) => handleQuickSubmit(e, false)}
+              disabled={isSavingQuickDocument}
               className="px-5 py-3 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold rounded-2xl text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer"
             >
               <FileCheck className="h-4 w-4" />
-              <span>Save First as Draft (Review by Maker)</span>
+              <span>{isSavingQuickDocument ? 'Saving…' : 'Save as Draft'}</span>
             </button>
 
             <button
               type="button"
               onClick={(e) => handleQuickSubmit(e, true)}
+              disabled={isSavingQuickDocument}
               className="px-6 py-3 bg-gradient-to-r from-emerald-600 to-[#0d4f8b] hover:from-emerald-500 hover:to-[#0b3d6b] text-white font-bold rounded-2xl text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer"
             >
               <Send className="h-4 w-4" />
-              <span>Approve &amp; Dispatch via Peppol AS4 / OTA</span>
+              <span>{isSavingQuickDocument ? 'Processing…' : 'Validate & Submit to E-Invoice Flow'}</span>
             </button>
           </div>
         </form>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, FileCode, CheckCircle, AlertTriangle, AlertCircle, RefreshCw, Layers } from 'lucide-react';
+import { ApiError, apiFetch } from '../lib/api';
 
 interface PayloadSimulatorProps {
   onSimulateSuccess: () => void;
@@ -339,20 +340,10 @@ export default function PayloadSimulator({ onSimulateSuccess }: PayloadSimulator
       const isOman = activePreset === 'oman_valid' || activePreset === 'oman_invalid';
       const endpoint = isOman ? '/api/validate-oman' : '/api/simulate';
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': activePreset === 'malformed' ? 'text/plain' : 'application/json'
-        },
-        body: isOman ? jsonText : JSON.stringify({
-          payload: finalPayload,
-          formatName: activePreset.toUpperCase()
-        })
-      });
-
-      const resData = await response.json();
+      if (!isOman) throw new Error('Only Oman PINT-OM validation is supported by the connected backend.');
+      const resData = await apiFetch<any>(endpoint, { method: 'POST', body: jsonText });
       
-      if (response.ok || resData.status === 'success') {
+      if (resData.isValid || resData.status === 'success') {
         setSendResult({
           status: 'success',
           message: isOman 
@@ -369,9 +360,10 @@ export default function PayloadSimulator({ onSimulateSuccess }: PayloadSimulator
         onSimulateSuccess();
       }
     } catch (error: any) {
+      const payload = error instanceof ApiError ? error.payload as any : null;
       setSendResult({
         status: 'error',
-        message: `HTTP POST Failed: ${error.message}`
+        message: payload?.message || `HTTP POST Failed: ${error.message}`
       });
     } finally {
       setIsSending(false);

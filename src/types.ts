@@ -8,7 +8,7 @@ export type DocumentType =
 
 export type InvoiceDirection = 'Outbound (AR)' | 'Inbound (AP)';
 
-export type InvoiceStatus = 'Reported' | 'Sent' | 'Pending' | 'Rejected';
+export type InvoiceStatus = 'Draft' | 'Validated' | 'Reported' | 'Sent' | 'Pending' | 'Rejected' | 'Cancelled';
 
 export interface InvoiceLineItem {
   name: string;
@@ -19,7 +19,7 @@ export interface InvoiceLineItem {
 }
 
 export type ErpSystem = 'SAP S/4HANA' | 'Oracle Cloud ERP' | 'Microsoft Dynamics 365' | 'Tally Prime' | 'Odoo ERP';
-export type SourceChannel = 'REST API' | 'SFTP Sync' | 'File Upload' | 'Manual Entry' | 'ERP Integration';
+export type SourceChannel = 'REST API' | 'SFTP Sync' | 'File Upload' | 'Manual Entry' | 'ERP Integration' | 'AP Inbound REST API';
 
 export interface Invoice {
   id?: string;
@@ -36,12 +36,15 @@ export interface Invoice {
   st: InvoiceStatus;
   tdd: string; // TDD status e.g. 'Submit · Ack', 'Submit · In transit', 'Disregard', 'Resubmit'
   tt: string; // 20-char BTOM-001 bitmap
-  uuid: string; // BTOM-002 UUID v5
+  uuid: string | null; // BTOM-002 UUID v5; null until validation/submission
   cat: string; // VAT Category e.g. 'S 5%'
   ent: string; // Entity ID e.g. 'E1', 'E2', 'E3'
   lines: [string, number, string, string][]; // Line item tuples for quick display: [name, qty, priceStr, cat]
   b2c?: boolean;
   cn?: string; // Preceding invoice reference
+  billingReferenceNumber?: string;
+  notes?: string;
+  validationErrors?: Array<{ rule?: string; field?: string; code?: string; message: string }>;
   err?: string; // Error detail if rejected
   warn?: string; // Warning detail if AB
   ap?: string; // AP status e.g. 'Awaiting approval', 'Approved · posted to ERP'
@@ -51,10 +54,18 @@ export interface Invoice {
   createdAt?: string;
   erpSystem?: ErpSystem;
   sourceChannel?: SourceChannel;
+  documentType?: 'STANDARD_380' | 'SIMPLIFIED_B2C' | 'CREDIT_NOTE_381' | 'DEBIT_NOTE_383' | 'SELF_BILLED_389' | 'SELF_BILLED_CN_261';
+  docTypeCode?: '380' | '381' | '383' | '389' | '261';
+  source?: 'MANUAL' | 'REST_API' | 'BATCH' | 'SFTP' | 'ERP' | 'AP_INBOUND';
+  createdBy?: string;
+  mlsStatus?: string | null;
+  extra?: Record<string, unknown>;
 }
 
 export interface Entity {
   id: string;
+  company_group?: string;
+  short_code?: string;
   name: string;
   nameAr?: string;
   type?: string;
@@ -72,6 +83,12 @@ export interface Entity {
   creditNotePrefix?: string;
   creditNoteSuffix?: string;
   status: 'Registered' | 'Pending Consent' | 'Terminated';
+}
+
+export interface CompanyGroup {
+  id: string;
+  name: string;
+  group_vatin: string;
 }
 
 export interface User {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, RoleMode } from '../types';
 import { 
   Shield, UserPlus, Users, Settings, Lock, AlertTriangle, CheckCircle2, 
@@ -6,6 +6,8 @@ import {
   Plus, Edit3, Trash2, Key, Globe, Database, FileText, Check, Copy, RefreshCw, Eye, EyeOff,
   Calendar, Clock, RotateCcw
 } from 'lucide-react';
+import { apiFetch, getApiFieldErrors, unwrapList, type ApiFieldErrors } from '../lib/api';
+import { useConfirmation } from './ConfirmationDialog';
 
 interface AdministrationViewProps {
   roleMode: RoleMode;
@@ -13,10 +15,12 @@ interface AdministrationViewProps {
   maskAmounts: boolean;
   onToggleMaskAmounts: () => void;
   users: User[];
-  onAddUser: (user: Partial<User>) => void;
-  onToggleUserStatus: (id: string) => void;
+  onAddUser: (user: Partial<User>) => Promise<{ temporaryPassword?: string } | void>;
+  onToggleUserStatus: (id: string) => Promise<void>;
   activeTab?: string;
   onTabChange?: (tab: string) => void;
+  onEntitiesChanged?: () => Promise<void>;
+  isPlatformAdmin?: boolean;
 }
 
 export const AdministrationView: React.FC<AdministrationViewProps> = ({
@@ -28,8 +32,11 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   onAddUser,
   onToggleUserStatus,
   activeTab = 'adm',
-  onTabChange
+  onTabChange,
+  onEntitiesChanged,
+  isPlatformAdmin = false
 }) => {
+  const [confirmAction, confirmationDialog] = useConfirmation();
   // Local active subtab fallback if not controlled externally
   const [internalTab, setInternalTab] = useState<string>(activeTab);
   const currentTab = activeTab || internalTab;
@@ -43,66 +50,16 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
 
   // ---------------- SETUP COMPANY STATE ----------------
   const [setupMode, setSetupMode] = useState<'single' | 'group'>('group');
-  const [groupVatin, setGroupVatin] = useState('OM1200001234');
+  const [groupVatin, setGroupVatin] = useState('');
+  const [groupName, setGroupName] = useState('');
   const [vatGroupError, setVatGroupError] = useState('');
+  const [groupSaveError, setGroupSaveError] = useState('');
+  const [isSavingGroup, setIsSavingGroup] = useState(false);
+  const [companyGroups, setCompanyGroups] = useState<any[]>([]);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [selectedCompanyGroup, setSelectedCompanyGroup] = useState('');
 
-  const [entities, setEntities] = useState([
-    {
-      id: 'E1',
-      name: 'Intl. Intelligence Solutions LLC',
-      nameAr: 'شركة الحلول الاستخبارية الدولية ش.م.م',
-      crNum: 'CR-1094852',
-      vatin: 'OM1100123456',
-      branchId: '0000',
-      address: 'Way 3302, Bldg 45, Al Khuwair, Muscat',
-      email: 'tax@iis-oman.om',
-      phone: '+968 2411 9900',
-      contactPerson: 'Khalfan Al-Busaidi',
-      isic: '6201 - IT & Software Services',
-      type: 'Parent Entity',
-      invoicePrefix: 'IIS-2026-',
-      invoiceSuffix: '/OM',
-      creditNotePrefix: 'CN-IIS-',
-      creditNoteSuffix: '/OM'
-    },
-    {
-      id: 'E2',
-      name: 'Aji Alibri Enterprises SAOC',
-      nameAr: 'مؤسسة العبري ش.م.ع.ع',
-      crNum: 'CR-1049211',
-      vatin: 'OM1100223344',
-      branchId: '0001',
-      address: 'Way 1204, Bldg 12, Sohar Port Zone',
-      email: 'finance@alibri-enterprises.om',
-      phone: '+968 2688 4411',
-      contactPerson: 'Fatma Al-Lawati',
-      isic: '4659 - Wholesale Equipment',
-      type: 'Subsidiary',
-      invoicePrefix: 'INV-E2-',
-      invoiceSuffix: '/SOHAR',
-      creditNotePrefix: 'CN-E2-',
-      creditNoteSuffix: '/SOHAR'
-    },
-    {
-      id: 'E3',
-      name: 'Salalah Port Services Branch',
-      nameAr: 'فرع خدمات ميناء صلالة',
-      crNum: 'CR-1088421',
-      vatin: 'OM1100334455',
-      branchId: '0002',
-      address: 'Freezone Bldg 8, Salalah',
-      email: 'ops@salalahport-branch.om',
-      phone: '+968 2329 1122',
-      contactPerson: 'Said Al-Shanfari',
-      isic: '5224 - Cargo Handling',
-      type: 'Branch Entity',
-      invoicePrefix: 'INV-SLL-',
-      invoiceSuffix: '/SLL',
-      creditNotePrefix: 'CN-SLL-',
-      creditNoteSuffix: '/SLL'
-    }
-  ]);
-
+  const [entities, setEntities] = useState<any[]>([]);
   // Form State for Adding/Updating Sub-Company
   const [subName, setSubName] = useState('');
   const [subNameAr, setSubNameAr] = useState('');
@@ -123,6 +80,8 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [subCnSuffix, setSubCnSuffix] = useState('/CN');
 
   const [editingEntityId, setEditingEntityId] = useState<string | null>(null);
+  const [entityErrors, setEntityErrors] = useState<ApiFieldErrors>({});
+  const [isSavingEntity, setIsSavingEntity] = useState(false);
 
   const handleGroupVatinChange = (val: string) => {
     setGroupVatin(val);
@@ -133,53 +92,91 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
     }
   };
 
-  const handleAddOrUpdateEntity = (e: React.FormEvent) => {
+  const loadEntities = async () => {
+    const entityPayload = await apiFetch<any[] | { results?: any[] }>('/api/entities?page_size=100');
+    const groupPayload = await apiFetch<any[] | { results?: any[] }>('/api/company-groups?page_size=100');
+    setEntities(unwrapList(entityPayload));
+    setCompanyGroups(unwrapList(groupPayload));
+  };
+
+  const resetGroupForm = () => {
+    setEditingGroupId(null);
+    setGroupName('');
+    setGroupVatin('');
+    setVatGroupError('');
+    setGroupSaveError('');
+  };
+
+  const handleSaveGroup = async () => {
+    const editing = Boolean(editingGroupId);
+    if (!await confirmAction({ title: 'Create VAT group?', description: `${groupName.trim()} · ${groupVatin.trim().toUpperCase()}`, detail: 'This establishes a new tenant boundary. Verify the registered VAT group name and OM12 VATIN before continuing.', confirmLabel: 'Create VAT group', kind: 'create' })) return;
+    setGroupSaveError('');
+    setIsSavingGroup(true);
+    try {
+      await apiFetch(editingGroupId ? `/api/company-groups/${editingGroupId}` : '/api/company-groups', {
+        method: editingGroupId ? 'PATCH' : 'POST', body: JSON.stringify({ name: groupName.trim(), group_vatin: groupVatin.trim().toUpperCase() })
+      });
+      await loadEntities();
+      await onEntitiesChanged?.();
+      resetGroupForm();
+    } catch (error) {
+      const fields = getApiFieldErrors(error);
+      setGroupSaveError(Object.entries(fields).flatMap(([field, messages]) => messages.map((message) => `${field}: ${message}`)).join(' ') || (error instanceof Error ? error.message : 'VAT group creation failed.'));
+    } finally {
+      setIsSavingGroup(false);
+    }
+  };
+
+  const handleDeleteGroup = async (group: any) => {
+    if (!await confirmAction({ title: 'Delete empty VAT group?', description: `${group.name} / ${group.group_vatin}`, detail: 'Deletion is allowed only when no active companies belong to this group.', confirmLabel: 'Delete VAT group', kind: 'danger' })) return;
+    setGroupSaveError('');
+    try {
+      await apiFetch(`/api/company-groups/${group.id}`, { method: 'DELETE' });
+      await loadEntities();
+      await onEntitiesChanged?.();
+      if (editingGroupId === group.id) resetGroupForm();
+    } catch (error) {
+      const fields = getApiFieldErrors(error);
+      setGroupSaveError(Object.values(fields).flat().join(' ') || (error instanceof Error ? error.message : 'VAT group deletion failed.'));
+    }
+  };
+
+  useEffect(() => {
+    void loadEntities().catch((error) => console.warn('Entity loading failed:', error));
+  }, []);
+
+  const handleAddOrUpdateEntity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!subName || !subVat) return;
-
-    if (editingEntityId) {
-      setEntities(entities.map(ent => ent.id === editingEntityId ? {
-        ...ent,
-        name: subName,
-        nameAr: subNameAr || subName,
-        crNum: subCr || ent.crNum,
-        vatin: subVat,
-        branchId: subBranch,
-        address: subAddress || ent.address,
-        email: subEmail || ent.email,
-        phone: subPhone || ent.phone,
-        contactPerson: subContact || ent.contactPerson,
-        isic: subIsic,
-        type: subType,
-        invoicePrefix: subInvPrefix,
-        invoiceSuffix: subInvSuffix,
-        creditNotePrefix: subCnPrefix,
-        creditNoteSuffix: subCnSuffix
-      } : ent));
+    if (setupMode === 'group' && !selectedCompanyGroup) {
+      setEntityErrors({ company_group: ['Select the existing business group for this subsidiary or branch.'] });
+      return;
+    }
+    if (!editingEntityId && !await confirmAction({ title: 'Create legal company?', description: `${subName} · ${subVat}`, detail: 'This creates a legal-entity tenant and Peppol participant configuration. Confirm the CR and OM11 VATIN are correct.', confirmLabel: 'Create company', kind: 'create' })) return;
+    const body = {
+      name: subName, nameAr: subNameAr, crNum: subCr, vatin: subVat,
+      pid: `0248:${subVat}`, branchId: subBranch, address: subAddress, email: subEmail,
+      phone: subPhone, entity_type: subType === 'Branch Entity' ? 'BRANCH' : subType === 'Subsidiary' ? 'SUBSIDIARY' : 'HQ',
+      invoicePrefix: subInvPrefix, invoiceSuffix: subInvSuffix, creditNoteSuffix: subCnSuffix,
+      prefixes: [subInvPrefix], short_code: editingEntityId ? undefined : `E${entities.length + 1}`,
+      standalone: setupMode === 'single',
+      company_group: setupMode === 'group' ? selectedCompanyGroup : null,
+    };
+    setEntityErrors({});
+    setIsSavingEntity(true);
+    try {
+      await apiFetch(editingEntityId ? `/api/entities/${editingEntityId}` : '/api/entities', {
+        method: editingEntityId ? 'PATCH' : 'POST', body: JSON.stringify(body)
+      });
+      await loadEntities();
+      await onEntitiesChanged?.();
       setEditingEntityId(null);
-    } else {
-      const newId = `E${entities.length + 1}`;
-      setEntities([
-        ...entities,
-        {
-          id: newId,
-          name: subName,
-          nameAr: subNameAr || subName,
-          crNum: subCr || `CR-${Math.floor(100000 + Math.random() * 900000)}`,
-          vatin: subVat,
-          branchId: subBranch,
-          address: subAddress || 'Muscat, Sultanate of Oman',
-          email: subEmail || `contact@entity-${newId.toLowerCase()}.om`,
-          phone: subPhone || '+968 2400 0000',
-          contactPerson: subContact || 'Authorized Representative',
-          isic: subIsic,
-          type: subType,
-          invoicePrefix: subInvPrefix,
-          invoiceSuffix: subInvSuffix,
-          creditNotePrefix: subCnPrefix,
-          creditNoteSuffix: subCnSuffix
-        }
-      ]);
+    } catch (error) {
+      const fieldErrors = getApiFieldErrors(error);
+      setEntityErrors(Object.keys(fieldErrors).length ? fieldErrors : { non_field_errors: [error instanceof Error ? error.message : 'Company save failed.'] });
+      return;
+    } finally {
+      setIsSavingEntity(false);
     }
 
     // Reset Form
@@ -196,6 +193,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
     setSubInvSuffix('/OM');
     setSubCnPrefix('CN-E1-');
     setSubCnSuffix('/CN');
+    setSelectedCompanyGroup('');
   };
 
   const handleEditEntityClick = (ent: typeof entities[0]) => {
@@ -214,7 +212,9 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
     setSubCnPrefix(ent.creditNotePrefix || 'CN-E1-');
     setSubCnSuffix(ent.creditNoteSuffix || '/CN');
     setSubIsic(ent.isic);
-    setSubType(ent.type as any);
+    setSubType(ent.entity_type === 'BRANCH' ? 'Branch Entity' : ent.entity_type === 'SUBSIDIARY' ? 'Subsidiary' : 'Parent Entity');
+    setSetupMode(ent.company_group ? 'group' : 'single');
+    setSelectedCompanyGroup(ent.company_group || '');
   };
 
   // ---------------- USER MANAGEMENT STATE ----------------
@@ -222,20 +222,34 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<'Admin' | 'Finance Manager' | 'Invoice Clerk' | 'Operations Viewer' | 'Auditor'>('Finance Manager');
   const [newEnt, setNewEnt] = useState('All Entities');
+  const [temporaryPassword, setTemporaryPassword] = useState('');
+  const [showTemporaryPassword, setShowTemporaryPassword] = useState(false);
+  const [credentialEmail, setCredentialEmail] = useState('');
+  const [passwordCopied, setPasswordCopied] = useState(false);
+  const [userCreateError, setUserCreateError] = useState('');
 
-  const handleCreateUserSubmit = (e: React.FormEvent) => {
+  const handleCreateUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newEmail || !newName) return;
-    onAddUser({
-      e: newEmail,
-      n: newName,
-      r: newRole,
-      ent: newEnt,
-      st: 'Active',
-      ll: 'Just now'
-    });
-    setNewEmail('');
-    setNewName('');
+    if (!newEnt || newEnt === 'All Entities') {
+      setUserCreateError('Select the user’s primary company. Group-wide access is derived from that company’s VAT group.');
+      return;
+    }
+    if (!await confirmAction({ title: 'Create user account?', description: `${newEmail} · ${newRole}`, detail: 'The account becomes active immediately with access to the selected company scope. A temporary password will be generated.', confirmLabel: 'Create user', kind: 'create' })) return;
+    setUserCreateError('');
+    setTemporaryPassword('');
+    setShowTemporaryPassword(false);
+    setPasswordCopied(false);
+    try {
+      const registeredEmail = newEmail;
+      const result = await onAddUser({ e: newEmail, n: newName, r: newRole, ent: newEnt, st: 'Active', ll: 'Just now' });
+      setTemporaryPassword(result?.temporaryPassword || '');
+      setCredentialEmail(registeredEmail);
+      setNewEmail('');
+      setNewName('');
+    } catch (error) {
+      setUserCreateError(error instanceof Error ? error.message : 'User creation failed.');
+    }
   };
 
   // Helper function to format timestamp as DD_MM_YY : HH:MM
@@ -258,10 +272,10 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [logCategory, setLogCategory] = useState<'all' | 'user' | 'ota_peppol' | 'server' | 'errors'>('all');
   const [logSearch, setLogSearch] = useState('');
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4' | 'AUDIT'>('ALL');
-  const [fromDateTime, setFromDateTime] = useState('2026-07-29T00:00');
-  const [toDateTime, setToDateTime] = useState('2026-07-29T23:59');
+  const [fromDateTime, setFromDateTime] = useState('');
+  const [toDateTime, setToDateTime] = useState('');
 
-  const sampleLogs = [
+  const [systemLogs, setSystemLogs] = useState<any[]>([
     {
       id: 'LOG-9945',
       timestamp: '2026-08-02 00:35:10',
@@ -392,9 +406,22 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
       message: 'User permission updated to Finance Manager with posting rights',
       details: 'Granted by admin@iis-oman.om'
     }
-  ];
+  ]);
 
-  const filteredLogs = sampleLogs.filter(log => {
+  useEffect(() => {
+    void apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100').then((payload) => setSystemLogs(unwrapList(payload).map((log) => ({
+      id: log.id,
+      timestamp: log.created_at,
+      category: log.entity === 'Transmission' ? 'ota_peppol' : log.action?.includes('ERROR') ? 'errors' : 'user',
+      level: log.entity === 'Transmission' ? 'AS4' : log.action?.includes('ERROR') ? 'ERROR' : 'AUDIT',
+      entity: log.entity,
+      user: log.user_email || 'System',
+      message: `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`,
+      details: JSON.stringify(log.detail || {}),
+    })))).catch((error) => console.warn('System log loading failed:', error));
+  }, []);
+
+  const filteredLogs = systemLogs.filter(log => {
     const matchesCategory = logCategory === 'all' || log.category === logCategory;
     const matchesLevel = logLevel === 'ALL' || log.level === logLevel;
 
@@ -480,8 +507,45 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [apiKey, setApiKey] = useState('fat_live_9988223344556677889900aabbcc');
   const [showKey, setShowKey] = useState(false);
 
+  useEffect(() => {
+    void apiFetch<any>('/api/config').then((config) => {
+      setGenCountry(config.country);
+      setGenTimeZone(config.timezone);
+      setGenCurrency(config.base_currency);
+      setGenFxRate(String(config.fx_rate_usd));
+      setGenLanguage(config.language_mode === 'EN_AR_BILINGUAL' ? 'en-ar' : config.language_mode.toLowerCase());
+      setEnableMfa(config.mfa_enforced);
+      setEnableAlerts(config.security_alerts);
+      setEnableAdminAlerts(config.admin_alerts);
+      setAllowLogin(config.allow_user_logins);
+      setEnableAutoBackups(config.enable_auto_backups);
+      setBackupRetention(`${config.backup_retention_years}_years`);
+      setDowntimeSchedule(config.maintenance_window);
+      setWebhookUrl(config.webhook_url);
+      setAdminAlertContact(config.admin_alert_contact);
+      setApiKey(config.master_api_key || 'Not configured');
+    }).catch((error) => console.warn('Configuration loading failed:', error));
+  }, []);
+
+  const saveGeneralConfig = async () => {
+    try {
+      await apiFetch('/api/config', { method: 'PATCH', body: JSON.stringify({
+        country: genCountry, timezone: genTimeZone, base_currency: genCurrency,
+        fx_rate_usd: genFxRate, language_mode: genLanguage === 'en-ar' ? 'EN_AR_BILINGUAL' : genLanguage.toUpperCase(),
+        mfa_enforced: enableMfa, security_alerts: enableAlerts, admin_alerts: enableAdminAlerts,
+        allow_user_logins: allowLogin, backup_retention_years: Number.parseInt(backupRetention) || 7,
+        enable_auto_backups: enableAutoBackups,
+        maintenance_window: downtimeSchedule, webhook_url: webhookUrl, admin_alert_contact: adminAlertContact,
+      }) });
+      alert('General configurations saved.');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Configuration save failed.');
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn">
+      {confirmationDialog}
       {/* Top Section Header */}
       <div>
         <h2 className="text-xl font-bold text-[#0d4f8b] flex items-center justify-between">
@@ -628,7 +692,17 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                       </td>
                       <td className="py-3 px-3 text-right">
                         <button
-                          onClick={() => onToggleUserStatus(u.id)}
+                          onClick={async () => {
+                            const enabling = u.st !== 'Active';
+                            if (!await confirmAction({
+                              title: enabling ? 'Enable this user?' : 'Disable this user?',
+                              description: `${u.n} / ${u.e}`,
+                              detail: enabling ? 'The user will regain portal access immediately.' : 'Existing tokens may remain valid briefly, but new logins will be blocked.',
+                              confirmLabel: enabling ? 'Enable user' : 'Disable user',
+                              kind: enabling ? 'create' : 'danger',
+                            })) return;
+                            await onToggleUserStatus(u.id);
+                          }}
                           className="px-2.5 py-1 text-[11px] font-bold text-[#0d4f8b] hover:bg-blue-50 rounded-lg transition-all cursor-pointer border border-slate-200"
                         >
                           {u.st === 'Active' ? 'Disable' : 'Enable'}
@@ -649,6 +723,17 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
             </h3>
 
             <form onSubmit={handleCreateUserSubmit} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+              {(temporaryPassword || userCreateError) && <div className={`sm:col-span-2 lg:col-span-4 rounded-2xl border-2 p-4 ${temporaryPassword ? 'bg-emerald-50 border-emerald-300 text-emerald-950' : 'bg-red-50 border-red-300 text-red-900'}`}>
+                {temporaryPassword ? <div className="space-y-3">
+                  <div className="flex items-start gap-2"><CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" /><div><b className="block text-sm">User account created successfully</b><p className="text-xs mt-0.5">Login credentials were sent to <mark className="bg-yellow-200 text-emerald-950 px-1.5 py-0.5 rounded font-bold">{credentialEmail}</mark> (simulated email — no message was actually sent).</p></div></div>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl bg-white border border-emerald-200 p-3">
+                    <div className="flex-1"><span className="block text-[10px] uppercase tracking-wider font-bold text-slate-500">One-time temporary password</span><code className="font-mono text-sm font-bold tracking-wider select-all">{showTemporaryPassword ? temporaryPassword : '••••••••••••••••'}</code></div>
+                    <button type="button" onClick={() => setShowTemporaryPassword((visible) => !visible)} className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 font-bold text-xs text-slate-700">{showTemporaryPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{showTemporaryPassword ? 'Hide password' : 'View password'}</button>
+                    <button type="button" onClick={() => { void navigator.clipboard.writeText(temporaryPassword); setPasswordCopied(true); setTimeout(() => setPasswordCopied(false), 1800); }} className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs">{passwordCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}{passwordCopied ? 'Copied' : 'Copy password'}</button>
+                  </div>
+                  <p className="text-[11px] text-emerald-800">For this MVP, email delivery is simulated. In production, send an expiring account-activation link instead of the password.</p>
+                </div> : userCreateError}
+              </div>}
               <div>
                 <label className="block text-slate-600 font-bold mb-1">Corporate Email Address *</label>
                 <input
@@ -695,10 +780,8 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                   onChange={(e) => setNewEnt(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none text-slate-800 font-bold"
                 >
-                  <option value="All Entities">All Legal Entities (Group)</option>
-                  <option value="E1 — Intl. Intelligence Solutions">E1 — HQ Muscat</option>
-                  <option value="E2 — Aji Alibri Enterprises">E2 — Sohar Operations</option>
-                  <option value="E3 — Salalah Port Services">E3 — Salalah Port Branch</option>
+                  <option value="All Entities">Select a primary company...</option>
+                  {entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.short_code || entity.id} — {entity.name}</option>)}
                 </select>
               </div>
 
@@ -822,7 +905,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <label
-                onClick={() => setSetupMode('single')}
+                onClick={() => { setSetupMode('single'); setSubType('Parent Entity'); setSelectedCompanyGroup(''); }}
                 className={`p-4 rounded-2xl border cursor-pointer transition-all ${
                   setupMode === 'single'
                     ? 'border-[#0d4f8b] bg-blue-50/50 ring-2 ring-blue-200'
@@ -833,7 +916,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                   type="radio"
                   name="tax_mode"
                   checked={setupMode === 'single'}
-                  onChange={() => setSetupMode('single')}
+                  onChange={() => { setSetupMode('single'); setSubType('Parent Entity'); setSelectedCompanyGroup(''); }}
                   className="mr-2 text-[#0d4f8b]"
                 />
                 <b className="font-bold text-slate-900 text-sm">1.) Standalone / Single Legal Entity</b>
@@ -843,7 +926,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
               </label>
 
               <label
-                onClick={() => setSetupMode('group')}
+                onClick={() => { setSetupMode('group'); if (subType === 'Parent Entity') setSubType('Subsidiary'); }}
                 className={`p-4 rounded-2xl border cursor-pointer transition-all ${
                   setupMode === 'group'
                     ? 'border-[#0d4f8b] bg-blue-50/50 ring-2 ring-blue-200'
@@ -854,35 +937,44 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                   type="radio"
                   name="tax_mode"
                   checked={setupMode === 'group'}
-                  onChange={() => setSetupMode('group')}
+                  onChange={() => { setSetupMode('group'); if (subType === 'Parent Entity') setSubType('Subsidiary'); }}
                   className="mr-2 text-[#0d4f8b]"
                 />
-                <b className="font-bold text-slate-900 text-sm">2.) VAT Group Registration (OM12...)</b>
+                <b className="font-bold text-slate-900 text-sm">2.) Subsidiary / Branch Company</b>
                 <p className="text-slate-600 mt-1">
-                  Multiple legal entities consolidated under a single Group Tax ID beginning with <code className="font-mono text-[11px]">OM12...</code>.
+                  Assign this company to an existing business group. Create and maintain groups separately below.
                 </p>
               </label>
             </div>
 
             {setupMode === 'group' && (
               <div className="p-4 bg-indigo-50/50 border border-indigo-200 rounded-2xl space-y-2">
-                <label className="block text-xs font-bold text-indigo-950">
-                  Parent VAT Group ID (Must start with OM12... for Oman VAT Groups)
-                </label>
-                <input
-                  type="text"
-                  value={groupVatin}
-                  onChange={(e) => handleGroupVatinChange(e.target.value)}
-                  className="w-full max-w-md bg-white border border-indigo-300 rounded-xl px-3 py-2 font-mono text-xs font-bold text-indigo-900 outline-none"
-                />
-                {vatGroupError && (
-                  <p className="text-xs text-red-600 font-bold flex items-center gap-1 mt-1">
-                    <AlertTriangle className="h-4 w-4" /> {vatGroupError}
-                  </p>
-                )}
+                <label className="block text-xs font-bold text-indigo-950">Assign Existing Business Group *</label>
+                <select required value={selectedCompanyGroup} onChange={(e) => setSelectedCompanyGroup(e.target.value)}
+                  className="w-full max-w-xl bg-white border border-indigo-300 rounded-xl px-3 py-2.5 text-xs font-bold text-indigo-900 outline-none">
+                  <option value="">Select a VAT group...</option>
+                  {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name} · {group.group_vatin}</option>)}
+                </select>
+                {!companyGroups.length && <p className="text-xs font-semibold text-amber-700">No group is available. A technical administrator must create one first.</p>}
               </div>
             )}
           </div>
+
+          {isPlatformAdmin && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2"><Users className="h-5 w-5 text-indigo-600" /> VAT Group Management</h3>
+                <p className="text-xs text-slate-500">Technical administrators can add, view, edit and delete empty groups. Groups containing companies are protected.</p>
+              </div>
+              {groupSaveError && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-bold text-red-800">{groupSaveError}</div>}
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+                <div><label className="block text-xs font-bold text-indigo-950 mb-1">VAT Group Name</label><input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="e.g. VASS Business Group" className="w-full bg-white border border-indigo-300 rounded-xl px-3 py-2.5 text-xs font-bold" /></div>
+                <div><label className="block text-xs font-bold text-indigo-950 mb-1">Group VATIN (OM12 + 8 digits)</label><input value={groupVatin} onChange={(e) => handleGroupVatinChange(e.target.value.toUpperCase())} placeholder="OM1200001234" className="w-full bg-white border border-indigo-300 rounded-xl px-3 py-2.5 font-mono text-xs font-bold" />{vatGroupError && <p className="mt-1 text-[11px] font-bold text-red-600">{vatGroupError}</p>}</div>
+                <div className="flex gap-2"><button type="button" onClick={handleSaveGroup} disabled={isSavingGroup || !groupName.trim() || !groupVatin.trim() || Boolean(vatGroupError)} className="px-4 py-2.5 bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold whitespace-nowrap">{isSavingGroup ? 'Saving...' : editingGroupId ? 'Update Group' : 'Add Group'}</button>{editingGroupId && <button type="button" onClick={resetGroupForm} className="px-3 py-2.5 border border-slate-300 bg-white rounded-xl text-xs font-bold">Cancel</button>}</div>
+              </div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full text-xs"><thead className="bg-slate-50 text-left text-[10px] uppercase text-slate-500"><tr><th className="p-3">Group</th><th className="p-3">VATIN</th><th className="p-3">Companies</th><th className="p-3 text-right">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{companyGroups.map((group) => <tr key={group.id}><td className="p-3 font-bold text-slate-900">{group.name}</td><td className="p-3 font-mono font-bold text-emerald-800">{group.group_vatin}</td><td className="p-3">{group.company_count ?? 0}</td><td className="p-3 text-right"><button type="button" onClick={() => { setEditingGroupId(group.id); setGroupName(group.name); setGroupVatin(group.group_vatin); setGroupSaveError(''); }} className="mr-2 rounded-lg border border-slate-200 px-2.5 py-1.5 font-bold text-blue-700"><Edit3 className="inline h-3.5 w-3.5 mr-1" />Edit</button><button type="button" onClick={() => handleDeleteGroup(group)} disabled={Boolean(group.company_count)} title={group.company_count ? 'Move or remove all companies before deleting this group' : 'Delete group'} className="rounded-lg border border-red-200 px-2.5 py-1.5 font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="inline h-3.5 w-3.5 mr-1" />Delete</button></td></tr>)}</tbody></table></div>
+            </div>
+          )}
 
           {/* Legal Entities Directory */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
@@ -961,6 +1053,16 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
             </h3>
 
             <form onSubmit={handleAddOrUpdateEntity} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+              {Object.keys(entityErrors).length > 0 ? (
+                <div role="alert" className="sm:col-span-2 lg:col-span-3 rounded-xl border border-red-300 bg-red-50 p-3 text-red-900">
+                  <b className="block text-sm">Company could not be saved</b>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {(Object.entries(entityErrors) as Array<[string, string[]]>).flatMap(([field, messages]) => messages.map((message) => (
+                      <li key={`${field}-${message}`}><span className="font-mono font-bold">{field}</span>: {message}</li>
+                    )))}
+                  </ul>
+                </div>
+              ) : null}
               <div>
                 <label className="block text-slate-600 font-bold mb-1">Company Name (English) *</label>
                 <input
@@ -1017,9 +1119,12 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                   required
                   placeholder="e.g. OM1100556677"
                   value={subVat}
-                  onChange={(e) => setSubVat(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 outline-none font-mono font-bold text-slate-800"
+                  onChange={(e) => { setSubVat(e.target.value.toUpperCase()); setEntityErrors((current) => ({ ...current, vatin: [] })); }}
+                  aria-invalid={Boolean(entityErrors.vatin?.length)}
+                  aria-describedby={entityErrors.vatin?.length ? 'company-vatin-error' : undefined}
+                  className={`w-full bg-slate-50 border rounded-xl p-2.5 outline-none font-mono font-bold text-slate-800 ${entityErrors.vatin?.length ? 'border-red-500 ring-2 ring-red-200' : 'border-slate-200'}`}
                 />
+                {entityErrors.vatin?.length ? <p id="company-vatin-error" className="mt-1 text-[11px] font-semibold text-red-700">{entityErrors.vatin.join(' ')}</p> : null}
               </div>
 
               <div>
@@ -1137,10 +1242,11 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                 )}
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-[#0d4f8b] hover:bg-blue-900 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-2xs"
+                  disabled={isSavingEntity}
+                  className="px-5 py-2.5 bg-[#0d4f8b] hover:bg-blue-900 disabled:opacity-60 text-white font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-2xs"
                 >
-                  <Plus className="h-4 w-4" />
-                  <span>{editingEntityId ? 'Save Entity Updates' : 'Add Legal Entity'}</span>
+                  {isSavingEntity ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  <span>{isSavingEntity ? 'Saving…' : editingEntityId ? 'Save Entity Updates' : 'Add Legal Entity'}</span>
                 </button>
               </div>
             </form>
@@ -1624,7 +1730,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
               </div>
 
               <button
-                onClick={() => alert('General technical configurations (Country, Timezone, Currency, MFA, Auto Backups & Maintenance Window) saved successfully!')}
+                onClick={saveGeneralConfig}
                 className="w-full sm:w-auto px-6 py-3 bg-[#0d4f8b] hover:bg-blue-900 text-white font-bold rounded-xl text-xs transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
               >
                 <Sliders className="h-4 w-4" />

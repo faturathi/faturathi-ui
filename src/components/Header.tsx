@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FaturathiLogo, NetbueLogo } from './Logos';
 import { Bell, HelpCircle, RefreshCw, X, AlertTriangle, Clock, FileText, ShieldCheck, LogOut, User, Key, ShieldAlert } from 'lucide-react';
 import { AuthUser } from './LoginPage';
+import { CompanyGroup, Entity } from '../types';
 
 interface HeaderProps {
   selectedEntity: string;
@@ -14,6 +15,10 @@ interface HeaderProps {
   onLogout: () => void;
   onOpenCertModal?: () => void;
   certVerified?: boolean;
+  entities: Entity[];
+  companyGroups: CompanyGroup[];
+  selectedGroup: string;
+  onSelectGroup: (groupId: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,7 +31,11 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onLogout,
   onOpenCertModal,
-  certVerified = false
+  certVerified = false,
+  entities,
+  companyGroups,
+  selectedGroup,
+  onSelectGroup
 }) => {
   const [showBellPanel, setShowBellPanel] = useState(false);
 
@@ -109,8 +118,13 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-[9px] uppercase tracking-wider text-white/60 block font-semibold">
                 Client / Supplier VAT Group
               </span>
-              <span className="font-bold text-white text-xs">Faturathi Demo Group</span>
-              <span className="text-[10px] text-emerald-300 block">VAT Group OM1200001234</span>
+              {companyGroups.length > 1 ? (
+                <select value={selectedGroup} onChange={(e) => onSelectGroup(e.target.value)}
+                  className="bg-slate-900/80 text-white font-semibold text-xs rounded border border-white/30 px-2 py-0.5 outline-none">
+                  {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              ) : <span className="font-bold text-white text-xs">{companyGroups[0]?.name || 'No business group assigned'}</span>}
+              <span className="text-[10px] text-emerald-300 block">VAT Group {companyGroups.find((g) => g.id === selectedGroup)?.group_vatin || companyGroups[0]?.group_vatin || '—'}</span>
             </div>
 
             <div className="h-6 w-px bg-white/20"></div>
@@ -124,10 +138,10 @@ export const Header: React.FC<HeaderProps> = ({
                 onChange={(e) => onSelectEntity(e.target.value)}
                 className="bg-slate-900/80 text-white font-semibold text-xs rounded border border-white/30 px-2 py-0.5 outline-none cursor-pointer hover:border-white transition-colors"
               >
-                <option value="">Whole group — 3 Supplier Companies</option>
-                <option value="E1">International Intelligence Solutions LLC · OM1100123456</option>
-                <option value="E2">Aji Alibri Enterprises · OM1100223344</option>
-                <option value="E3">Alfaris Business Solutions · OM1100334455</option>
+                <option value="group">Whole group — {entities.length} Supplier {entities.length === 1 ? 'Company' : 'Companies'}</option>
+                {entities.map((entity) => (
+                  <option key={entity.id} value={entity.id}>{entity.name} · {entity.vatin}</option>
+                ))}
               </select>
             </div>
           </div>

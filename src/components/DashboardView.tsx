@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Invoice, RoleMode } from '../types';
+import { CompanyGroup, Entity, Invoice } from '../types';
 import { TrendingUp, AlertTriangle, ShieldCheck, CheckCircle2, FileText, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -8,6 +8,8 @@ interface DashboardViewProps {
   onSelectInvoice: (inv: Invoice) => void;
   selectedEntity: string;
   onNavigateTab?: (tab: string) => void;
+  entities: Entity[];
+  companyGroup?: CompanyGroup;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -15,14 +17,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   maskAmounts,
   onSelectInvoice,
   selectedEntity,
-  onNavigateTab
+  onNavigateTab,
+  entities,
+  companyGroup
 }) => {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [apArFilter, setApArFilter] = useState<'all' | 'ar' | 'ap'>('all');
 
   // Calculate filtered counts
   const filteredInvoices = invoices.filter((inv) => {
-    if (selectedEntity && inv.ent !== selectedEntity) return false;
+    const selected = entities.find((entity) => entity.id === selectedEntity);
+    if (selectedEntity !== 'group' && inv.ent !== selectedEntity && inv.ent !== selected?.short_code) return false;
     if (apArFilter === 'ar') return inv.dir === 'Outbound (AR)';
     if (apArFilter === 'ap') return inv.dir === 'Inbound (AP)';
     return true;
@@ -227,42 +232,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                <tr>
-                  <td className="py-2.5 px-2">
-                    <span className="font-semibold text-slate-900 block">International Intelligence Solutions LLC</span>
-                    <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">0248:OM1100123456</span>
-                  </td>
-                  <td className="py-2.5 px-2 text-right">1,152</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(16890.121)}</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(4810.745)}</td>
-                  <td className="py-2.5 px-2 text-right font-bold">{fmt(12079.376)}</td>
-                </tr>
-                <tr>
-                  <td className="py-2.5 px-2">
-                    <span className="font-semibold text-slate-900 block">Aji Alibri Enterprises</span>
-                    <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">0248:OM1100223344</span>
-                  </td>
-                  <td className="py-2.5 px-2 text-right">132</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(3750.200)}</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(0.000)}</td>
-                  <td className="py-2.5 px-2 text-right font-bold">{fmt(3750.200)}</td>
-                </tr>
-                <tr>
-                  <td className="py-2.5 px-2">
-                    <span className="font-semibold text-slate-900 block">Alfaris Business Solutions</span>
-                    <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">0248:OM1100334455</span>
-                  </td>
-                  <td className="py-2.5 px-2 text-right">245</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(8420.500)}</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(1200.000)}</td>
-                  <td className="py-2.5 px-2 text-right font-bold">{fmt(7220.500)}</td>
-                </tr>
+                {entities.map((entity) => {
+                  const docs = invoices.filter((invoice) => invoice.ent === entity.id || invoice.ent === entity.short_code);
+                  const outputVat = docs.filter((invoice) => invoice.dir === 'Outbound (AR)').reduce((sum, invoice) => sum + invoice.vat, 0);
+                  const inputVat = docs.filter((invoice) => invoice.dir === 'Inbound (AP)').reduce((sum, invoice) => sum + invoice.vat, 0);
+                  return <tr key={entity.id}>
+                    <td className="py-2.5 px-2"><span className="font-semibold text-slate-900 block">{entity.name}</span>
+                      <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{entity.pid || `0248:${entity.vatin}`}</span></td>
+                    <td className="py-2.5 px-2 text-right">{docs.length}</td>
+                    <td className="py-2.5 px-2 text-right">{fmt(outputVat)}</td>
+                    <td className="py-2.5 px-2 text-right">{fmt(inputVat)}</td>
+                    <td className="py-2.5 px-2 text-right font-bold">{fmt(outputVat - inputVat)}</td>
+                  </tr>;
+                })}
                 <tr className="bg-slate-50/80 font-bold">
-                  <td className="py-2.5 px-2 text-slate-900">VAT Group OM1200001234 — filing total</td>
-                  <td className="py-2.5 px-2 text-right text-slate-900">1,529</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(29060.821)}</td>
-                  <td className="py-2.5 px-2 text-right">{fmt(6010.745)}</td>
-                  <td className="py-2.5 px-2 text-right text-[#0d4f8b]">{fmt(23050.076)}</td>
+                  <td className="py-2.5 px-2 text-slate-900">VAT Group {companyGroup?.group_vatin || '—'} — filing total</td>
+                  <td className="py-2.5 px-2 text-right text-slate-900">{invoices.length}</td>
+                  <td className="py-2.5 px-2 text-right">{fmt(arVat)}</td>
+                  <td className="py-2.5 px-2 text-right">{fmt(apVat)}</td>
+                  <td className="py-2.5 px-2 text-right text-[#0d4f8b]">{fmt(arVat - apVat)}</td>
                 </tr>
               </tbody>
             </table>

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Download, Database, ShieldCheck, FileSpreadsheet, Search, Filter, Printer, ArrowUpDown, ChevronLeft, ChevronRight, AlertCircle, CheckCircle2, Clock, FileText, SearchCheck, Calendar, RotateCcw, CalendarDays } from 'lucide-react';
+import { apiFetch, unwrapList } from '../lib/api';
 
 interface ReportsViewProps {
   activeTab?: string;
@@ -83,7 +84,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4'>('ALL');
 
   // Sample report dataset
-  const [reportData] = useState<ReportRow[]>([
+  const [reportData, setReportData] = useState<ReportRow[]>([
     {
       id: '1',
       num: 'INV-2026-07-0012',
@@ -200,13 +201,42 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   ]);
 
   // System logs dataset
-  const systemLogs = [
+  const [systemLogs, setSystemLogs] = useState<any[]>([
     { time: '2026-08-01 14:32:01', level: 'AS4', src: 'C2 Gateway', msg: 'Peppol AS4 transmission outbound receipt verified. Message ID: 20260801-143201-9812@faturathi.om' },
     { time: '2026-08-01 14:30:15', level: 'INFO', src: 'REST API', msg: 'POST /api/v1/invoices/validate — 200 OK (Execution time: 14ms)' },
     { time: '2026-08-01 14:15:22', level: 'WARN', src: 'SFTP Watcher', msg: 'Batch file Oman_Batch_20260801.csv contains 1 row with missing Seller EAS prefix. Auto-defaulted to 0248.' },
     { time: '2026-08-01 13:50:00', level: 'ERROR', src: 'Validation Engine', msg: 'Rule IBR-003-OM violated on INV-2026-07-0009: Buyer VAT ID format invalid.' },
     { time: '2026-08-01 12:10:44', level: 'INFO', src: 'Secondary DB', msg: 'AES-256 Write-Once-Read-Many (WORM) snapshot synchronized to Oman Cloud Cold Vault.' }
-  ];
+  ]);
+
+  useEffect(() => {
+    void Promise.all([
+      apiFetch<any[]>('/api/reports/tax-grid'),
+      apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100'),
+    ]).then(([rows, logPayload]) => {
+      setReportData(rows.map((row) => ({
+        id: row.id || row.invoice_number,
+        num: row.invoice_number,
+        date: row.date,
+        time: row.time || '00:00:00',
+        docType: row.direction === 'AP' ? 'AP Invoice' : row.type?.includes('Credit') ? 'Credit Note' : 'AR Invoice',
+        counterparty: row.counterparty,
+        vatin: row.counterparty_vatin,
+        netAmt: row.net,
+        vatAmt: row.vat,
+        totalAmt: row.total,
+        status: row.status === 'Reported' ? 'Cleared' : row.status === 'Rejected' ? 'Rejected' : 'Pending OTA',
+        errorCode: row.error,
+        hash: row.uuid || '',
+      })));
+      setSystemLogs(unwrapList(logPayload).map((log) => ({
+        time: log.created_at,
+        level: log.action?.includes('ERROR') ? 'ERROR' : log.entity === 'Transmission' ? 'AS4' : 'INFO',
+        src: log.entity || 'API',
+        msg: `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`,
+      })));
+    }).catch((error) => console.warn('Report loading failed:', error));
+  }, []);
 
   // Filtering & Sorting
   const filteredData = reportData.filter((row) => {

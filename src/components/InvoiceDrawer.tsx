@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Invoice, RoleMode, canEditInvoice } from '../types';
 import { X, Copy, Check, Download, Edit, CheckCircle2, AlertTriangle, QrCode, FileCode, Printer, ShieldCheck, Lock } from 'lucide-react';
 import { ErpSourceBadge } from './ErpSourceBadge';
+import { buildB2cQrDataUrl } from '../lib/b2cQr';
 
 interface InvoiceDrawerProps {
   invoice: Invoice | null;
@@ -23,6 +24,12 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
   onEditInvoice
 }) => {
   const [copiedUuid, setCopiedUuid] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+
+  useEffect(() => {
+    setQrDataUrl('');
+    if (invoice?.b2c) void buildB2cQrDataUrl(invoice).then(setQrDataUrl).catch(console.error);
+  }, [invoice]);
 
   if (!invoice) return null;
 
@@ -96,43 +103,6 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
 
   const fmt = (val: number) =>
     maskAmounts ? '•••••' : val.toLocaleString('en', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-
-  // Generate simple QR code SVG path grid representation
-  const renderQrSvg = () => {
-    let rects = '';
-    let seed = 13;
-    for (let y = 0; y < 21; y++) {
-      for (let x = 0; x < 21; x++) {
-        seed = (seed * 73 + 41) % 211;
-        const isCorner =
-          (x < 7 && y < 7) || (x > 13 && y < 7) || (x < 7 && y > 13);
-        let fill = false;
-        if (isCorner) {
-          if (
-            (x % 6 === 0 || y % 6 === 0 || (x > 1 && x < 5 && y > 1 && y < 5)) && x < 7 ||
-            ((x - 14) % 6 === 0 || y % 6 === 0 || (x > 15 && x < 19 && y > 1 && y < 5)) && x > 13 && y < 7 ||
-            (x % 6 === 0 || (y - 14) % 6 === 0 || (x > 1 && x < 5 && y > 15 && y < 19)) && y > 13
-          ) {
-            fill = true;
-          }
-        } else {
-          fill = seed % 2 === 0;
-        }
-
-        if (fill) {
-          rects += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
-        }
-      }
-    }
-    return (
-      <svg
-        viewBox="0 0 21 21"
-        fill="#12222f"
-        className="w-28 h-28 border-4 border-white bg-white shadow-md rounded-lg"
-        dangerouslySetInnerHTML={{ __html: rects }}
-      />
-    );
-  };
 
   // Lifecycle steps
   const steps = isAp
@@ -437,10 +407,10 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
               <span>B2C Readable Invoice — TLV Base64 QR Code</span>
             </h4>
             <div className="flex items-center gap-4 pt-1">
-              {renderQrSvg()}
+              {qrDataUrl ? <img src={qrDataUrl} alt={`B2C QR code for ${invoice.n}`} className="w-32 h-32 border-4 border-white bg-white shadow-md rounded-lg" /> : <div className="w-32 h-32 bg-slate-200 animate-pulse rounded-lg" />}
               <div className="text-[11px] text-slate-600 space-y-1">
                 <p>
-                  <b>Tags 1–9 encoded:</b> QR version · invoice type · seller name · seller VATIN · date · time · total incl. VAT · VAT total · <b>tag 9: BTOM-004 Seller UUID</b>.
+                  <b>Tags 1–9 encoded:</b> QR version · invoice type · seller name · seller VATIN · date · time · total incl. VAT · VAT total · invoice UUID.
                 </p>
                 <p className="text-[10px] text-slate-400">
                   Fixed B2C buyer values per IBR-173-OM: "General customer" · OM · 0248:997770000099.

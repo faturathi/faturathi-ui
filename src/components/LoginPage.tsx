@@ -23,6 +23,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { User, RoleMode } from '../types';
+import { apiFetch, saveSession } from '../lib/api';
 
 export interface AuthUser extends User {
   roleCategory: 'superadmin' | 'portal_admin' | 'finance_mgr' | 'normal_user';
@@ -52,7 +53,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
   {
     id: 'user-2',
     n: 'Tariq Al-Siyabi',
-    e: 'portal.admin@intel-sol.om',
+    e: 'salim.h@intel-sol.om',
     r: 'Admin / Manager',
     ent: 'All Organization Entities',
     st: 'Active',
@@ -67,7 +68,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
   {
     id: 'user-3',
     n: 'Fatma Al-Zahra',
-    e: 'fatma.z@intel-sol.om',
+    e: 'fatma.z@alibri.om',
     r: 'Accountant / Finance Manager',
     ent: 'E1 & E2 (International Intelligence)',
     st: 'Active',
@@ -82,7 +83,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
   {
     id: 'user-4',
     n: 'Ahmed Al-Balushi',
-    e: 'ahmed.b@intel-sol.om',
+    e: 'ahmed.b@alfaris.om',
     r: 'Normal App User',
     ent: 'E1 — HQ Muscat',
     st: 'Active',
@@ -103,7 +104,7 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [selectedRole, setSelectedRole] = useState<AuthUser>(DEMO_USER_ROLES[0]);
   const [email, setEmail] = useState<string>(DEMO_USER_ROLES[0].e);
-  const [password, setPassword] = useState<string>('●●●●●●●●●●');
+  const [password, setPassword] = useState<string>('Demo@1234');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [rememberMe, setRememberMe] = useState<boolean>(true);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
@@ -115,35 +116,66 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [authStep, setAuthStep] = useState<'credentials' | 'mfa_otp'>('credentials');
   const [otpCode, setOtpCode] = useState<string>('');
   const [otpError, setOtpError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const handleRoleSelect = (usr: AuthUser) => {
     setSelectedRole(usr);
     setEmail(usr.e);
-    setPassword('●●●●●●●●●●');
+    setPassword('Demo@1234');
   };
 
-  const handleCredentialsSubmit = (e: React.FormEvent) => {
+  const toAuthUser = (user: any): AuthUser => {
+    const roleMap: Record<string, RoleMode> = {
+      SUPERADMIN: 'admin', ADMIN: 'admin', APPROVER: 'finmgr', MAKER: 'maker', VIEWER: 'audit'
+    };
+    return {
+      ...selectedRole, id: user.id, n: user.name || user.email, e: user.email,
+      email: user.email, r: user.role, role: user.role, ent: user.entityId || 'ALL',
+      branch: user.branch, mappedRoleMode: roleMap[user.role] || 'ops',
+    };
+  };
+
+  const completeLogin = (result: any) => {
+    saveSession({ token: result.token, refresh: result.refresh });
+    onLoginSuccess(toAuthUser(result.user));
+  };
+
+  const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoggingIn(true);
-    setTimeout(() => {
+    setLoginError(null);
+    try {
+      const result = await apiFetch<any>('/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ email, password })
+      });
+      if (result.mfa_required) {
+        setAuthStep('mfa_otp');
+        setOtpCode('');
+        setOtpError(null);
+      } else {
+        completeLogin(result);
+      }
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : 'Login failed.');
+    } finally {
       setIsLoggingIn(false);
-      setAuthStep('mfa_otp');
-      setOtpCode('582910'); // Pre-fill static 6-digit OTP
-      setOtpError(null);
-    }, 400);
-  };
-
-  const handleOtpSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (otpCode.trim() !== '582910') {
-      setOtpError('Invalid 2FA OTP code. Please enter the static demo security code: 582910');
-      return;
     }
+  };
+
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setIsLoggingIn(true);
-    setTimeout(() => {
+    setOtpError(null);
+    try {
+      const result = await apiFetch<any>('/api/auth/mfa-verify', {
+        method: 'POST', body: JSON.stringify({ email, otp: otpCode })
+      });
+      completeLogin(result);
+    } catch (error) {
+      setOtpError(error instanceof Error ? error.message : 'MFA verification failed.');
+    } finally {
       setIsLoggingIn(false);
-      onLoginSuccess(selectedRole);
-    }, 600);
+    }
   };
 
   const handleAutoFillDemoOtp = () => {
@@ -401,6 +433,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                       <span>Remember my role on this browser</span>
                     </label>
                   </div>
+
+                  {loginError ? (
+                    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700">
+                      {loginError}
+                    </div>
+                  ) : null}
 
                   {/* Submit Button */}
                   <button

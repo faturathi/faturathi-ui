@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Invoice } from '../types';
+import { useConfirmation } from './ConfirmationDialog';
 import { 
   X, 
   AlertTriangle, 
@@ -22,17 +23,17 @@ interface EditInvoiceModalProps {
   invoice: Invoice | null;
   isOpen: boolean;
   onClose: () => void;
-  onSaveAndResend: (updatedInvoice: Invoice) => void;
+  onSaveAndResend: (updatedInvoice: Invoice) => void | Promise<void>;
 }
 
-export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
+type EditInvoiceModalContentProps = Omit<EditInvoiceModalProps, 'invoice' | 'isOpen'> & { invoice: Invoice };
+
+const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
   invoice,
-  isOpen,
   onClose,
   onSaveAndResend
 }) => {
-  if (!isOpen || !invoice) return null;
-
+  const [confirmAction, confirmationDialog] = useConfirmation();
   // Form State initialized from preloaded invoice data
   const [invoiceNumber, setInvoiceNumber] = useState(invoice.n);
   const [issueDate, setIssueDate] = useState(invoice.d);
@@ -46,6 +47,8 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
   const [buyerEas, setBuyerEas] = useState(invoice.eas);
   const [entityId, setEntityId] = useState(invoice.ent || 'E1');
   const [sellerVat, setSellerVat] = useState(invoice.sVat || 'OM1100123456');
+  const [billingReference, setBillingReference] = useState(invoice.cn || '');
+  const [adjustmentReason, setAdjustmentReason] = useState(invoice.notes || '');
 
   // Line Items
   const [lineItems, setLineItems] = useState<Array<{ name: string; qty: number; price: number; vatCat: string }>>(() => {
@@ -66,13 +69,17 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
   const [showSuccessToast, setShowSuccessToast] = useState(false);
 
   // Field Level Validation Flags
-  const isVatValid = (v: string) => /^OM\d{8,12}$/i.test(v.trim());
+  const isVatValid = (v: string) => /^OM11\d{8}$/i.test(v.trim());
   const isBuyerNameValid = (n: string) => n.trim().length >= 3;
   const isInvoiceNumValid = (num: string) => num.trim().length >= 3;
 
   const buyerVatError = !isVatValid(buyerVat);
   const buyerNameError = !isBuyerNameValid(buyerName);
   const invoiceNumError = !isInvoiceNumValid(invoiceNumber);
+  const validationErrors = invoice.validationErrors || [];
+  const hasServerFieldError = (field: string) => validationErrors.some((error) => error.field === field);
+  const correctionDocument = ['381', '383', '261'].includes(invoice.docTypeCode || '') || /credit note|debit note/i.test(docType);
+  const billingReferenceError = correctionDocument && !billingReference.trim();
 
   // Calculate Totals
   const calculatedNet = lineItems.reduce((acc, item) => acc + item.qty * item.price, 0);
@@ -87,9 +94,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
     if (!clean.startsWith('OM')) {
       clean = 'OM' + clean.replace(/[^0-9]/g, '');
     }
-    if (clean.length < 12) {
-      clean = clean.padEnd(12, '0');
-    }
+    clean = clean.replace(/[^A-Z0-9]/g, '');
     setBuyerVat(clean);
     if (buyerEas.includes(invoice.cpv)) {
       setBuyerEas(`0248:${clean}`);
@@ -111,11 +116,11 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
     setLineItems(updated);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (buyerVatError) {
-      setCustomError('Buyer VATIN must start with "OM" followed by 10 digits (e.g. OM1100123456). Please fix before re-submitting.');
+      setCustomError('Buyer VATIN must be "OM11" followed by exactly 8 digits (12 characters), e.g. OM1100123456. Enter the registered VATIN before re-submitting.');
       return;
     }
 
@@ -123,11 +128,14 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
       setCustomError('Buyer Legal Name is required (minimum 3 characters).');
       return;
     }
+    if (billingReferenceError) {
+      setCustomError('Credit notes, debit notes, and self-billed credit notes require the preceding invoice reference (BT-25).');
+      return;
+    }
+    if (!await confirmAction({ title: 'Re-submit corrected document?', description: `${docType} · ${invoiceNumber}`, detail: 'Confirm that every validation error is corrected. A successful Peppol/OTA transmission becomes non-editable.', confirmLabel: 'Re-submit to Peppol', kind: 'submit' })) return;
 
     setIsSubmitting(true);
-
-    setTimeout(() => {
-      // Create updated invoice object
+    try {
       const formattedLines: [string, number, string, string][] = lineItems.map(item => [
         item.name,
         item.qty,
@@ -153,22 +161,29 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
         cat: lineItems[0]?.vatCat || 'S 5%',
         ent: entityId,
         sVat: sellerVat,
+        cn: billingReference || undefined,
+        billingReferenceNumber: billingReference || undefined,
+        notes: adjustmentReason,
         lines: formattedLines
       };
 
-      onSaveAndResend(updatedInvoice);
-      setIsSubmitting(false);
+      await onSaveAndResend(updatedInvoice);
       setShowSuccessToast(true);
 
       setTimeout(() => {
         setShowSuccessToast(false);
         onClose();
       }, 1200);
-    }, 600);
+    } catch (error) {
+      setCustomError(error instanceof Error ? error.message : 'Invoice update failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+      {confirmationDialog}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden">
         
         {/* Modal Header */}
@@ -185,7 +200,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-blue-100 mt-0.5">
-                Invoice №: <b className="font-mono text-white">{invoice.n}</b> · UUID: <span className="font-mono text-emerald-200">{invoice.uuid.slice(0, 16)}...</span>
+                Invoice №: <b className="font-mono text-white">{invoice.n}</b> · UUID: <span className="font-mono text-emerald-200">{invoice.uuid ? `${invoice.uuid.slice(0, 16)}...` : 'Generated on submission'}</span>
               </p>
             </div>
           </div>
@@ -208,9 +223,10 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                   <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
                   <div>
                     <b className="text-sm font-bold text-red-950 block">Oman Tax Authority (OTA) / Peppol Network Rejection Notice</b>
-                    <p className="text-xs text-red-900 mt-1 leading-relaxed font-mono bg-white/80 p-2.5 rounded-xl border border-red-200">
-                      {customError || invoice.err || 'Schematron Validation Error: Buyer VATIN violates PINT-OM syntax rules or missing mandatory fields.'}
-                    </p>
+                    <div className="text-xs text-red-900 mt-1 leading-relaxed font-mono bg-white/80 p-2.5 rounded-xl border border-red-200 space-y-1">
+                      {customError && <p>{customError}</p>}
+                      {validationErrors.length ? validationErrors.map((error, index) => <p key={`${error.rule}-${index}`}><b>{error.rule || error.code || 'VALIDATION'}</b> · {error.field ? `${error.field}: ` : ''}{error.message}</p>) : !customError && <p>{invoice.err || 'PINT-OM validation failed. Correct the highlighted mandatory fields.'}</p>}
+                    </div>
                   </div>
                 </div>
 
@@ -221,7 +237,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                     className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-1.5"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span>Auto-Fix Buyer VATIN</span>
+                    <span>Normalize Buyer VATIN</span>
                   </button>
                 )}
               </div>
@@ -283,6 +299,8 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                     <option value="Simplified Invoice">388 — Simplified Invoice (B2C)</option>
                     <option value="Credit Note">381 — Credit Note</option>
                     <option value="Debit Note">383 — Debit Note</option>
+                    <option value="Self-Billed Invoice">389 — Self-Billed Invoice</option>
+                    <option value="Self-Billed Credit Note">261 — Self-Billed Credit Note</option>
                     <option value="Export">Export Invoice (0% Zero Rated)</option>
                   </select>
                 </div>
@@ -300,6 +318,15 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                   </select>
                 </div>
               </div>
+              {correctionDocument && <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl border p-3 ${billingReferenceError || hasServerFieldError('billing_reference') ? 'bg-red-50 border-red-400 ring-2 ring-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                <div><label className="block font-bold text-slate-700 mb-1">Preceding Invoice Reference (BT-25) *</label>
+                  <input value={billingReference} onChange={(e) => setBillingReference(e.target.value)} placeholder="Original invoice number"
+                    className={`w-full p-2.5 rounded-xl border font-mono ${billingReferenceError ? 'border-red-500' : 'border-slate-300'}`} />
+                  {billingReferenceError && <span className="text-[10px] text-red-700 font-bold">Required and must reference an existing invoice in this company scope.</span>}</div>
+                <div><label className="block font-bold text-slate-700 mb-1">Adjustment Reason / Explanation *</label>
+                  <input value={adjustmentReason} onChange={(e) => setAdjustmentReason(e.target.value)} placeholder="Reason for credit/debit adjustment"
+                    className="w-full p-2.5 rounded-xl border border-slate-300" /></div>
+              </div>}
             </div>
 
             {/* Section 2: Counterparty / Buyer Party Details (HIGHLIGHTED ERRORS HERE) */}
@@ -356,7 +383,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                         onClick={handleFixVatFormat}
                         className="text-[10px] text-red-700 hover:text-red-900 font-bold underline cursor-pointer"
                       >
-                        Auto-Fix 'OM'
+                        Normalize format
                       </button>
                     )}
                   </div>
@@ -378,7 +405,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
                   />
                   {buyerVatError ? (
                     <span className="text-[10px] text-red-600 font-bold block mt-1 bg-red-100 p-1 rounded border border-red-200">
-                      ❌ Invalid Oman VATIN. Must start with "OM" followed by 8–12 digits (e.g. OM1100654321).
+                      ❌ Invalid Oman VATIN. Use "OM11" followed by exactly 8 digits (e.g. OM1100654321).
                     </span>
                   ) : (
                     <span className="text-[10px] text-emerald-700 font-semibold block mt-1 flex items-center gap-1">
@@ -519,11 +546,11 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
               <div className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
                 <div>
-                  <b className="block font-bold">PINT-OM v1.0.1 Schematron Real-Time Evaluator</b>
+                  <b className="block font-bold">PINT-OM pre-submission validation</b>
                   <span className="text-[11px] text-emerald-800">
-                    {buyerVatError 
-                      ? '⚠️ 1 Field requires correction before re-submitting to OTA.' 
-                      : '✓ All 73 PINT-OM business rules satisfied. Ready for immediate OTA C5 clearance.'}
+                    {buyerVatError || billingReferenceError
+                      ? '⚠️ Mandatory fields require correction before re-submitting.' 
+                      : '✓ Local required-field checks passed. The backend performs authoritative PINT-OM validation before transmission.'}
                   </span>
                 </div>
               </div>
@@ -531,7 +558,7 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
               <span className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold ${
                 buyerVatError ? 'bg-red-200 text-red-900' : 'bg-emerald-200 text-emerald-900'
               }`}>
-                {buyerVatError ? 'FAIL (1 Error)' : 'PASS (73 Rules)'}
+                {buyerVatError || billingReferenceError ? `FAIL (${[buyerVatError, billingReferenceError].filter(Boolean).length} Error)` : 'LOCAL CHECK PASS'}
               </span>
             </div>
 
@@ -552,9 +579,9 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
             <button
               type="submit"
               form="edit-invoice-form"
-              disabled={isSubmitting || buyerVatError}
+              disabled={isSubmitting || buyerVatError || billingReferenceError}
               className={`w-full sm:w-auto px-5 py-2.5 font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer ${
-                buyerVatError 
+                buyerVatError || billingReferenceError
                   ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
                   : 'bg-gradient-to-r from-blue-700 to-emerald-700 hover:from-blue-800 hover:to-emerald-800 text-white'
               }`}
@@ -590,4 +617,9 @@ export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = ({
       )}
     </div>
   );
+};
+
+export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = (props) => {
+  if (!props.isOpen || !props.invoice) return null;
+  return <EditInvoiceModalContent key={props.invoice.id || props.invoice.n} invoice={props.invoice} onClose={props.onClose} onSaveAndResend={props.onSaveAndResend} />;
 };

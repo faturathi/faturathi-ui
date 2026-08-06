@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { Upload, FileCode, CheckCircle2, AlertTriangle, RefreshCw, Download, Server } from 'lucide-react';
+import { apiFetch } from '../lib/api';
+import { Invoice } from '../types';
 
 interface UploadBatchViewProps {
   onBatchParsed: (newInvoices: any[]) => void;
   activeTab?: string;
+  invoices: Invoice[];
 }
 
-export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed, activeTab = 'up_batch' }) => {
+export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed, invoices, activeTab = 'up_batch' }) => {
   const isIndividual = activeTab === 'up';
   const [isProcessing, setIsProcessing] = useState(false);
   const [stage, setStage] = useState(0);
@@ -34,57 +37,59 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
     }
   };
 
-  const startPipeline = (files: File[]) => {
+  const startPipeline = async (files: File[]) => {
     setIsProcessing(true);
     setStage(0);
     setProcessedResult(null);
-
-    let current = 0;
-    const interval = setInterval(() => {
-      current++;
-      if (current < stages.length) {
-        setStage(current);
-      } else {
-        clearInterval(interval);
-        setIsProcessing(false);
-
-        // Generate mock parsed invoices from uploaded batch
-        const parsedInvoices = files.map((f, idx) => ({
-          n: `BATCH-${Date.now().toString().slice(-4)}-${idx + 1}`,
-          d: new Date().toISOString().slice(0, 10),
-          t: '15:10:00',
-          type: 'Standard Invoice',
-          dir: 'Outbound (AR)',
-          cp: `Batch Customer ${idx + 1} SAOC`,
-          cpv: `OM1100${800000 + idx}`,
-          eas: `0248:OM1100${800000 + idx}`,
-          net: 450.0 + idx * 50,
-          vat: 22.5 + idx * 2.5,
-          st: 'Reported',
-          tdd: 'Reported',
-          tt: '10000000000000000000',
-          cat: 'S 5%',
-          b2c: false,
-          lines: [['Bulk import item line', 1, 450.0 + idx * 50, 'S 5%']],
-          sVat: 'OM1100123456'
-        }));
-
-        setProcessedResult({
-          total: files.length + 12,
-          valid: files.length + 11,
-          failed: 1,
-          errors: [
-            {
-              file: 'batch_inv_007.xml',
-              rule: 'ibr-003-om',
-              msg: 'Seller VAT identifier "OM9911" is not 10 digits.'
+    const errors: { file: string; rule: string; msg: string }[] = [];
+    const items: any[] = [];
+    try {
+      setStage(1);
+      const created: any[] = [];
+      for (const file of files) {
+        try {
+          if (file.name.toLowerCase().endsWith('.json')) {
+            const parsed = JSON.parse(await file.text());
+            items.push(...(Array.isArray(parsed) ? parsed : parsed.items || [parsed]));
+          } else {
+            const form = new FormData();
+            form.append('file', file);
+            const result = await apiFetch<{ created: any[]; errors?: any[] }>('/api/upload-batch/file', { method: 'POST', body: form });
+            created.push(...result.created);
+            for (const failure of result.errors || []) {
+              const details = failure.errors?.length ? failure.errors : [{ rule: 'validation', message: failure.error }];
+              details.forEach((detail: any) => errors.push({
+                file: `${file.name}${failure.invoice_number ? ` · ${failure.invoice_number}` : ''}`,
+                rule: detail.rule || detail.field || 'validation', msg: detail.message || failure.error
+              }));
             }
-          ]
-        });
-
-        onBatchParsed(parsedInvoices);
+          }
+        } catch (error) {
+          errors.push({ file: file.name, rule: 'upload-error', msg: error instanceof Error ? error.message : 'Upload failed.' });
+        }
       }
-    }, 600);
+      setStage(3);
+      const result = items.length
+        ? await apiFetch<{ created: any[]; errors?: any[] }>('/api/upload-batch', { method: 'POST', body: JSON.stringify({ items }) })
+        : { created: [], errors: [] };
+      created.push(...result.created);
+      for (const failure of result.errors || []) {
+        const details = failure.errors?.length ? failure.errors : [{ rule: 'validation', message: failure.error }];
+        details.forEach((detail: any) => errors.push({
+          file: failure.invoice_number || `Row ${failure.row}`,
+          rule: detail.rule || detail.field || 'validation', msg: detail.message || failure.error
+        }));
+      }
+      setStage(4);
+      const rejectedDocuments = created.filter((document) => document.st === 'Rejected').length;
+      setProcessedResult({ total: created.length, valid: created.length - rejectedDocuments, failed: rejectedDocuments || errors.length, errors });
+      onBatchParsed(created);
+    } catch (error) {
+      setProcessedResult({ total: items.length, valid: 0, failed: items.length || 1,
+        errors: [{ file: 'batch', rule: 'api-error', msg: error instanceof Error ? error.message : 'Upload failed.' }] });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -127,7 +132,7 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
           <span>Select Batch File</span>
           <input
             type="file"
-            multiple
+            multiple={!isIndividual}
             accept=".xml,.json,.csv,.xlsx"
             onChange={handleFileDrop}
             className="hidden"
@@ -158,7 +163,11 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
 
       {/* Batch Results Output */}
       {processedResult && !isProcessing && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4 animate-fadeIn">
+        <div role="status" className={`border-2 rounded-2xl p-5 shadow-2xs space-y-4 animate-fadeIn ${processedResult.failed ? 'bg-red-50 border-red-300' : 'bg-emerald-50 border-emerald-300'}`}>
+          <div className={`font-bold text-sm flex items-center gap-2 ${processedResult.failed ? 'text-red-900' : 'text-emerald-900'}`}>
+            {processedResult.failed ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+            <span>{processedResult.failed ? `Upload completed with ${processedResult.failed} rejected document(s). Open the rejected document to correct the highlighted fields.` : `Upload successful. ${processedResult.valid} document(s) validated and stored.`}</span>
+          </div>
           <div className="flex items-center justify-between pb-3 border-b border-slate-200">
             <h3 className="text-sm font-bold text-slate-800">Batch Processing Summary</h3>
             <span className="text-xs text-slate-400">Execution time: 1.24s</span>
@@ -210,7 +219,7 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
               <span>Pending &amp; Processed Batch Queue Status</span>
             </h3>
             <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-200">
-              3 Active Batches
+              {invoices.filter((invoice) => invoice.source === 'BATCH').length} Uploaded Documents
             </span>
           </div>
 
@@ -219,6 +228,16 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
           </p>
 
           <div className="space-y-2.5 pt-1 text-xs">
+            {invoices.filter((invoice) => invoice.source === 'BATCH').map((invoice) => (
+              <button key={invoice.id || invoice.n} onClick={() => onBatchParsed([])}
+                className="w-full text-left p-3 bg-white border border-slate-200 hover:border-blue-300 rounded-xl flex items-center justify-between">
+                <div><b className="font-mono text-slate-900 block">{invoice.n}</b>
+                  <span className="text-[11px] text-slate-500">{invoice.cp} · {invoice.createdAt || invoice.d}</span></div>
+                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-bold text-[10px] rounded-md">{invoice.st}</span>
+              </button>
+            ))}
+            {invoices.every((invoice) => invoice.source !== 'BATCH') && <p className="p-4 text-center text-slate-400">No uploaded documents in this tenant scope.</p>}
+            <div className="hidden">
             {/* Batch 1: Pending Approver Review */}
             <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between">
@@ -281,6 +300,7 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
                 <span>250 of 250 transmitted to OTA with Peppol AS4 receipt</span>
                 <span className="font-bold">100% Success</span>
               </div>
+            </div>
             </div>
           </div>
         </div>

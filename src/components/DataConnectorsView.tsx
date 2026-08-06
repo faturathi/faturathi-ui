@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { ApiError, apiFetch } from '../lib/api';
 import { 
   FileSpreadsheet, 
   Server, 
@@ -55,17 +56,7 @@ export const DataConnectorsView: React.FC = () => {
   const [emailStatus, setEmailStatus] = useState<string | null>(null);
 
   // REST API User Creation State
-  const [apiUsers, setApiUsers] = useState([
-    {
-      id: 'api-1',
-      name: 'SAP S/4HANA ERP Connector',
-      org: 'E1 — HQ Muscat',
-      role: 'Full Write (POST /api/invoices)',
-      apiKey: 'fat_live_99214a1f8b2c401',
-      bearerToken: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzYXAifQ.482910',
-      createdAt: '2026-07-28'
-    }
-  ]);
+  const [apiUsers, setApiUsers] = useState<any[]>([]);
   const [newApiName, setNewApiName] = useState('');
   const [newApiOrg, setNewApiOrg] = useState('E1 — HQ Muscat');
   const [newApiRole, setNewApiRole] = useState('Write & Read (POST & GET /api/invoices)');
@@ -204,14 +195,16 @@ export const DataConnectorsView: React.FC = () => {
         return;
       }
 
-      const res = await fetch('/api/validate', {
+      const data = await apiFetch<any>('/api/validate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed)
       });
-      const data = await res.json();
       setPostmanTestResult(data);
     } catch (err: any) {
+      if (err instanceof ApiError && err.payload) {
+        setPostmanTestResult(err.payload as any);
+        return;
+      }
       setPostmanTestResult({
         isValid: false,
         message: `Network Error calling /api/validate: ${err.message}`,
@@ -252,21 +245,23 @@ export const DataConnectorsView: React.FC = () => {
     }, 1200);
   };
 
-  const handleCreateApiUser = (e: React.FormEvent) => {
+  useEffect(() => {
+    void apiFetch<any[]>('/api/connectors/credentials').then(setApiUsers)
+      .catch((error) => console.warn('Credential loading failed:', error));
+  }, []);
+
+  const handleCreateApiUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newApiName.trim()) return;
-    const randomHex = Math.random().toString(36).substring(2, 12);
-    const newUsr = {
-      id: `api-${Date.now()}`,
-      name: newApiName.trim(),
-      org: newApiOrg,
-      role: newApiRole,
-      apiKey: `fat_live_${randomHex}`,
-      bearerToken: `Bearer eyJhbGciOiJIUzI1NiJ9.${randomHex}.${Date.now()}`,
-      createdAt: new Date().toLocaleDateString('en-CA')
-    };
-    setApiUsers(prev => [newUsr, ...prev]);
-    setNewApiName('');
+    try {
+      const credential = await apiFetch<any>('/api/connectors/credentials', {
+        method: 'POST', body: JSON.stringify({ name: newApiName.trim(), role: newApiRole })
+      });
+      setApiUsers(prev => [credential, ...prev]);
+      setNewApiName('');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Credential generation failed. Select one supplier company first.');
+    }
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -818,10 +813,11 @@ export const DataConnectorsView: React.FC = () => {
                     <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between gap-2">
                       <div className="truncate">
                         <span className="text-[10px] text-slate-500 block">BEARER TOKEN:</span>
-                        <span className="text-emerald-300 font-bold truncate block">{usr.bearerToken}</span>
+                        <span className="text-emerald-300 font-bold truncate block">{usr.bearerToken || 'Hidden — generate a new token to reveal it'}</span>
                       </div>
                       <button
-                        onClick={() => handleCopy(usr.bearerToken, `token-${usr.id}`)}
+                        onClick={() => usr.bearerToken && handleCopy(usr.bearerToken, `token-${usr.id}`)}
+                        disabled={!usr.bearerToken}
                         className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg shrink-0 cursor-pointer"
                         title="Copy Bearer Token"
                       >

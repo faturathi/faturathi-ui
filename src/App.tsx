@@ -22,8 +22,9 @@ import { LoginPage, AuthUser } from './components/LoginPage';
 import { CertificateWarningModal } from './components/CertificateWarningModal';
 import { PreLandingCertChecker } from './components/PreLandingCertChecker';
 import EndpointDocs from './components/EndpointDocs';
-import { Invoice, User, RoleMode, canEditInvoice } from './types';
+import { Invoice, User, RoleMode, canEditInvoice, Entity, CompanyGroup } from './types';
 import { AnimatePresence, motion } from 'motion/react';
+import { ApiError, apiFetch, clearSession, setActiveBusinessGroup, setActiveCompany, unwrapList } from './lib/api';
 
 const INITIAL_INVOICES: Invoice[] = [
   {
@@ -226,9 +227,13 @@ const INITIAL_USERS: User[] = [
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [activeTab, setActiveTab] = useState<string>('dash');
-  const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [selectedEntity, setSelectedEntity] = useState<string>(''); // empty = whole group
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedEntity, setSelectedEntity] = useState<string>('group');
+  const [selectedGroup, setSelectedGroup] = useState<string>('');
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>([]);
+  const [tenantContextLoaded, setTenantContextLoaded] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -249,7 +254,13 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    clearSession();
     setCurrentUser(null);
+    setInvoices([]);
+    setUsers([]);
+    setEntities([]);
+    setCompanyGroups([]);
+    setTenantContextLoaded(false);
   };
 
   const apiEndpoint = `${window.location.origin}/api/invoices`;
@@ -257,79 +268,116 @@ export default function App() {
   // Fetch invoices from backend
   const fetchInvoices = async () => {
     try {
-      const res = await fetch('/api/invoices');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setInvoices(data);
-        }
-      }
+      const data = await apiFetch<Invoice[]>('/api/invoices');
+      setInvoices(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.warn('Backend fetch failed, using memory state:', e);
+      console.warn('Backend invoice fetch failed:', e);
     }
   };
 
+  const fetchTenantContext = async () => {
+    const [entityPayload, groupPayload] = await Promise.all([
+      apiFetch<Entity[] | { results?: Entity[] }>('/api/entities?page_size=100'),
+      apiFetch<CompanyGroup[] | { results?: CompanyGroup[] }>('/api/company-groups?page_size=100')
+    ]);
+    const nextEntities = unwrapList(entityPayload);
+    const nextGroups = unwrapList(groupPayload);
+    if (nextEntities.some((entity) => !entity.company_group)) {
+      nextGroups.push({ id: 'standalone', name: 'Standalone Companies', group_vatin: '' });
+    }
+    setEntities(nextEntities);
+    setCompanyGroups(nextGroups);
+    const groupId = selectedGroup && nextGroups.some((group) => group.id === selectedGroup)
+      ? selectedGroup : nextGroups[0]?.id || '';
+    setSelectedGroup(groupId);
+    setActiveBusinessGroup(groupId);
+    setSelectedEntity('group');
+    setActiveCompany('group');
+    setTenantContextLoaded(true);
+  };
+
   useEffect(() => {
-    fetchInvoices();
-  }, []);
+    if (!currentUser) return;
+    void Promise.all([fetchTenantContext(), fetchUsers()]).catch((error) => {
+      console.error('Initial account data loading failed:', error);
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    setActiveCompany(selectedEntity);
+    setActiveBusinessGroup(selectedGroup);
+    if (currentUser && tenantContextLoaded) {
+      void Promise.all([
+        fetchInvoices(),
+        apiFetch<Entity[] | { results?: Entity[] }>('/api/entities?page_size=100')
+          .then((payload) => setEntities(unwrapList(payload)))
+      ]).catch((error) => console.error('Tenant scope refresh failed:', error));
+    }
+  }, [selectedEntity, selectedGroup, currentUser, tenantContextLoaded]);
+
+  const visibleEntities = selectedGroup
+    ? entities.filter((entity) => selectedGroup === 'standalone' ? !entity.company_group : entity.company_group === selectedGroup)
+    : entities;
+
+  const handleSelectGroup = (groupId: string) => {
+    setSelectedGroup(groupId);
+    setSelectedEntity('group');
+  };
 
   const handleResetDb = async () => {
     if (!confirm('This will reset seed data to standard defaults. Proceed?')) return;
     setIsResetting(true);
     try {
-      const res = await fetch('/api/seed', { method: 'POST' });
-      if (res.ok) {
-        await fetchInvoices();
-      } else {
-        setInvoices(INITIAL_INVOICES);
-      }
+      await apiFetch('/api/config/reset-seeds', { method: 'POST' });
+      await fetchTenantContext();
     } catch (e) {
-      setInvoices(INITIAL_INVOICES);
+      alert(e instanceof Error ? e.message : 'Database reset failed.');
     } finally {
       setIsResetting(false);
     }
   };
 
-  const handleCreateInvoiceSubmit = async (newInv: any) => {
+  const handleCreateInvoiceSubmit = async (newInv: any, validateAndSubmit = false) => {
     const invWithId: Invoice = {
       ...newInv,
-      ent: selectedEntity || 'E1',
+      ent: selectedEntity === 'group' ? '' : selectedEntity,
       branch: '100 — HQ Muscat',
-      uuid: newInv.uuid || `${Math.random().toString(36).slice(2, 10)}-${Date.now()}`
+      uuid: null
     };
 
-    try {
-      const res = await fetch('/api/invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(invWithId)
-      });
-      if (res.ok) {
-        await fetchInvoices();
-      } else {
-        setInvoices((prev) => [invWithId, ...prev]);
+    const created = await apiFetch<Invoice>('/api/invoices', {
+      method: 'POST', body: JSON.stringify(invWithId)
+    });
+    let finalDocument = created;
+    if (validateAndSubmit) {
+      const validation = await apiFetch<{ valid: boolean; errors: Array<{ field: string; message: string }> }>(
+        `/api/invoices/${encodeURIComponent(created.id || created.n)}/validate`, { method: 'POST' }
+      );
+      if (!validation.valid) {
+        const error = new Error(validation.errors.map((item) => `${item.field}: ${item.message}`).join('\n'));
+        (error as any).fieldErrors = validation.errors;
+        throw error;
       }
-    } catch (e) {
-      setInvoices((prev) => [invWithId, ...prev]);
+      finalDocument = await apiFetch<Invoice>(`/api/invoices/${encodeURIComponent(created.id || created.n)}/submit`, { method: 'POST' });
     }
-
+    await fetchInvoices();
+    setSelectedInvoice(finalDocument);
     setActiveTab('inv');
-    setSelectedInvoice(invWithId);
+    return finalDocument;
   };
 
-  const handleBatchParsed = async (newBatchInvoices: any[]) => {
-    setInvoices((prev) => [...newBatchInvoices, ...prev]);
+  const handleBatchParsed = async (_newBatchInvoices: any[]) => {
+    await fetchInvoices();
     setActiveTab('inv');
   };
 
-  const handleApproveAp = (invNum: string) => {
-    setInvoices((prev) =>
-      prev.map((i) =>
-        i.n === invNum ? { ...i, ap: 'Approved & Posted to ERP' } : i
-      )
-    );
-    if (selectedInvoice && selectedInvoice.n === invNum) {
-      setSelectedInvoice((prev) => prev ? { ...prev, ap: 'Approved & Posted to ERP' } : null);
+  const handleApproveAp = async (invNum: string) => {
+    try {
+      const invoice = invoices.find((item) => item.n === invNum);
+      await apiFetch(`/api/invoices/${encodeURIComponent(invoice?.id || invNum)}/approve`, { method: 'POST' });
+      await fetchInvoices();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Approval failed.');
     }
   };
 
@@ -361,37 +409,60 @@ export default function App() {
   };
 
   const handleSaveAndResendInvoice = async (updatedInvoice: Invoice) => {
-    setInvoices((prev) =>
-      prev.map((i) => (i.n === updatedInvoice.n ? updatedInvoice : i))
-    );
-
-    if (selectedInvoice && selectedInvoice.n === updatedInvoice.n) {
-      setSelectedInvoice(updatedInvoice);
-    }
-
     try {
-      await fetch('/api/invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const documentKey = updatedInvoice.id || updatedInvoice.n;
+      await apiFetch(`/api/invoices/${encodeURIComponent(documentKey)}`, {
+        method: 'PATCH',
         body: JSON.stringify(updatedInvoice)
       });
+      const result = await apiFetch<any>(`/api/invoices/${encodeURIComponent(documentKey)}/resubmit`, {
+        method: 'POST',
+        body: JSON.stringify({ cpv: updatedInvoice.cpv })
+      });
+      await fetchInvoices();
+      setSelectedInvoice(result.invoice || updatedInvoice);
     } catch (e) {
-      console.warn('Backend update note:', e);
+      if (e instanceof ApiError && e.payload && typeof e.payload === 'object') {
+        const rejectedInvoice = (e.payload as { invoice?: Invoice }).invoice;
+        if (rejectedInvoice) {
+          setSelectedInvoice(rejectedInvoice);
+          setEditingInvoice(rejectedInvoice);
+          await fetchInvoices();
+        }
+      }
+      throw e;
     }
   };
 
-  const handleAddUser = (newUser: any) => {
-    setUsers((prev) => [...prev, newUser]);
+  const handleAddUser = async (newUser: any) => {
+    const roleMap: Record<string, string> = {
+      Admin: 'ADMIN', 'Finance Manager': 'APPROVER', 'Invoice Clerk': 'MAKER',
+      'Operations Viewer': 'VIEWER', Auditor: 'VIEWER'
+    };
+    const created = await apiFetch<{ temporaryPassword?: string }>('/api/users', { method: 'POST', body: JSON.stringify({
+      email: newUser.e, first_name: newUser.n, role: roleMap[newUser.r] || 'VIEWER',
+      company: newUser.ent, branch: 'All Entities', mfa: true
+    }) });
+    await fetchUsers();
+    return created;
   };
 
-  const handleToggleUserStatus = (userId: string) => {
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === userId
-          ? { ...u, st: u.st === 'Active' ? 'Disabled' : 'Active' }
-          : u
-      )
-    );
+  const fetchUsers = async () => {
+    const payload = await apiFetch<any[] | { results?: any[] }>('/api/users?page_size=100');
+    setUsers(unwrapList(payload).map((u) => ({ id: u.id, n: `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email,
+      e: u.email, r: u.role, ent: u.branch || '', st: u.status, ll: '', mfa: u.mfa })));
+  };
+
+  const handleToggleUserStatus = async (userId: string) => {
+    try {
+      const user = users.find((entry) => entry.id === userId);
+      await apiFetch(`/api/users/${userId}`, {
+        method: 'PATCH', body: JSON.stringify({ is_active: user?.st !== 'Active' })
+      });
+      await fetchUsers();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'User status update failed.');
+    }
   };
 
   const handleTriggerTddSubmit = () => {
@@ -420,6 +491,10 @@ export default function App() {
         onLogout={handleLogout}
         onOpenCertModal={() => setIsCertModalOpen(true)}
         certVerified={certVerified}
+        entities={visibleEntities}
+        companyGroups={companyGroups}
+        selectedGroup={selectedGroup}
+        onSelectGroup={handleSelectGroup}
       />
 
       {/* Navbar Navigation */}
@@ -459,6 +534,8 @@ export default function App() {
             onSelectInvoice={setSelectedInvoice}
             selectedEntity={selectedEntity}
             onNavigateTab={setActiveTab}
+            entities={visibleEntities}
+            companyGroup={companyGroups.find((group) => group.id === selectedGroup)}
           />
         )}
 
@@ -472,6 +549,7 @@ export default function App() {
             onSelectEntity={setSelectedEntity}
             roleMode={roleMode}
             onEditInvoice={handleOpenEditInvoice}
+            entities={visibleEntities}
           />
         )}
 
@@ -492,7 +570,7 @@ export default function App() {
 
         {/* Tab 5: Upload & Batch */}
         {(activeTab === 'up' || activeTab === 'up_batch') && (
-          <UploadBatchView onBatchParsed={handleBatchParsed} activeTab={activeTab} />
+          <UploadBatchView onBatchParsed={handleBatchParsed} invoices={invoices} activeTab={activeTab} />
         )}
 
         {/* Tab 6: Data Sources & Client Connectors */}
@@ -533,6 +611,8 @@ export default function App() {
             onToggleUserStatus={handleToggleUserStatus}
             activeTab={activeTab}
             onTabChange={setActiveTab}
+            onEntitiesChanged={fetchTenantContext}
+            isPlatformAdmin={currentUser?.roleCategory === 'superadmin'}
           />
         )}
 

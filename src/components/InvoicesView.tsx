@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Invoice, RoleMode, canEditInvoice } from '../types';
+import { Entity, Invoice, RoleMode, canEditInvoice } from '../types';
 import { Search, Download, Filter, Eye, Copy, Check, AlertTriangle, ArrowUpRight, ArrowDownRight, Edit, Lock, ShieldCheck } from 'lucide-react';
 import { ErpSourceBadge } from './ErpSourceBadge';
 
@@ -11,6 +11,7 @@ interface InvoicesViewProps {
   onSelectEntity: (ent: string) => void;
   roleMode: RoleMode;
   onEditInvoice?: (inv: Invoice) => void;
+  entities: Entity[];
 }
 
 export const InvoicesView: React.FC<InvoicesViewProps> = ({
@@ -20,7 +21,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
   selectedEntity,
   onSelectEntity,
   roleMode,
-  onEditInvoice
+  onEditInvoice,
+  entities
 }) => {
   const [directionFilter, setDirectionFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('');
@@ -30,7 +32,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
 
   // Filter invoices
   const filtered = invoices.filter((inv) => {
-    if (selectedEntity && inv.ent !== selectedEntity) return false;
+    const selected = entities.find((entity) => entity.id === selectedEntity);
+    if (selectedEntity !== 'group' && inv.ent !== selectedEntity && inv.ent !== selected?.short_code) return false;
     if (directionFilter && inv.dir !== directionFilter) return false;
     if (typeFilter && inv.type !== typeFilter) return false;
     if (statusFilter && inv.st !== statusFilter) return false;
@@ -39,7 +42,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
       const match =
         inv.n.toLowerCase().includes(q) ||
         inv.cp.toLowerCase().includes(q) ||
-        inv.uuid.toLowerCase().includes(q);
+        (inv.uuid || '').toLowerCase().includes(q);
       if (!match) return false;
     }
     return true;
@@ -129,37 +132,20 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-400 font-bold uppercase text-[10px] tracking-wider">Supplier Entity:</span>
         <button
-          onClick={() => onSelectEntity('')}
+          onClick={() => onSelectEntity('group')}
           className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            !selectedEntity ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            selectedEntity === 'group' ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
           }`}
         >
-          Whole group (3 Suppliers)
+          Whole group ({entities.length} Suppliers)
         </button>
-        <button
-          onClick={() => onSelectEntity('E1')}
+        {entities.map((entity) => <button key={entity.id}
+          onClick={() => onSelectEntity(entity.id)}
           className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            selectedEntity === 'E1' ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Intl. Intelligence Solutions LLC
-        </button>
-        <button
-          onClick={() => onSelectEntity('E2')}
-          className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            selectedEntity === 'E2' ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Aji Alibri Enterprises
-        </button>
-        <button
-          onClick={() => onSelectEntity('E3')}
-          className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-            selectedEntity === 'E3' ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          Alfaris Business Solutions
-        </button>
+            selectedEntity === entity.id ? 'bg-[#0d4f8b] text-white shadow-2xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}>
+          {entity.name}
+        </button>)}
       </div>
 
       {/* Workflow Tracking Buckets */}
