@@ -24,7 +24,7 @@ import { PreLandingCertChecker } from './components/PreLandingCertChecker';
 import EndpointDocs from './components/EndpointDocs';
 import { Invoice, User, RoleMode, canEditInvoice, Entity, CompanyGroup } from './types';
 import { AnimatePresence, motion } from 'motion/react';
-import { ApiError, apiFetch, clearSession, setActiveBusinessGroup, setActiveCompany, unwrapList } from './lib/api';
+import { ApiError, apiFetch, apiUrl, clearSession, setActiveBusinessGroup, setActiveCompany, unwrapList } from './lib/api';
 
 const INITIAL_INVOICES: Invoice[] = [
   {
@@ -263,7 +263,7 @@ export default function App() {
     setTenantContextLoaded(false);
   };
 
-  const apiEndpoint = `${window.location.origin}/api/invoices`;
+  const apiEndpoint = apiUrl('/api/invoices');
 
   // Fetch invoices from backend
   const fetchInvoices = async () => {

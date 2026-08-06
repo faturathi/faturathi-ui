@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ApiError, apiFetch } from '../lib/api';
+import { ApiError, apiFetch, apiUrl } from '../lib/api';
 import { 
   FileSpreadsheet, 
   Server, 
@@ -837,7 +837,7 @@ export const DataConnectorsView: React.FC = () => {
                 <Terminal className="h-5 w-5" /> Real API / Postman Input Data Validator (73 Fields)
               </span>
               <button
-                onClick={() => handleCopy(`curl -X POST "${window.location.origin}/api/validate" \\
+                onClick={() => handleCopy(`curl -X POST "${apiUrl('/api/validate')}" \\
   -H "Content-Type: application/json" \\
   -d '${JSON.stringify(validPostmanPreset, null, 2)}'`, 'curl-sample')}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold cursor-pointer border border-slate-700 flex items-center gap-1.5"

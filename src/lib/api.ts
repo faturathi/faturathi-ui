@@ -3,6 +3,20 @@ const REFRESH_TOKEN_KEY = 'faturathi.refreshToken';
 let activeCompany = '';
 let activeBusinessGroup = '';
 
+const configuredApiBaseUrl = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+export const API_BASE_URL = configuredApiBaseUrl.replace(/\/+$/, '');
+
+export function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  let normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  // Accept either https://host or https://host/api as the configured base.
+  // Existing callers use /api/... paths, so remove one duplicate prefix.
+  if (/\/api$/i.test(API_BASE_URL) && /^\/api(?:\/|$)/i.test(normalizedPath)) {
+    normalizedPath = normalizedPath.slice(4) || '/';
+  }
+  return `${API_BASE_URL}${normalizedPath}`;
+}
+
 export interface AuthSession {
   token: string;
   refresh: string;
@@ -62,7 +76,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers });
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json')
     ? await response.json()

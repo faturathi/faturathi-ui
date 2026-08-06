@@ -3,6 +3,7 @@ import { Invoice, canEditInvoice } from '../types';
 import { Clock, RefreshCw, AlertTriangle, ShieldCheck, CheckCircle2, Code, Terminal, Copy, Check, Play, FileJson, Search, Filter, Layers, Edit, Send, Lock, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
 import { validateOmanInvoice, OmanValidationResult, FieldEvaluation, GROUPS_INFO } from '../lib/omanValidator';
 import { EditInvoiceModal } from './EditInvoiceModal';
+import { API_BASE_URL } from '../lib/api';
 
 interface TddMlsViewProps {
   invoices: Invoice[];
@@ -131,7 +132,7 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
     }
   };
 
-  const hostUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+  const hostUrl = API_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
   const postmanCurlSnippet = `curl -X POST "${hostUrl}/api/validate" \\
   -H "Content-Type: application/json" \\
   -d '${jsonInput.replace(/'/g, "\\'")}'`;
