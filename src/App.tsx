@@ -16,6 +16,7 @@ import { OnboardingView } from './components/OnboardingView';
 import { SecurityView } from './components/SecurityView';
 import { AdministrationView } from './components/AdministrationView';
 import { WhyFaturathiView } from './components/WhyFaturathiView';
+import { AboutView } from './components/AboutView';
 import { InvoiceDrawer } from './components/InvoiceDrawer';
 import { EditInvoiceModal } from './components/EditInvoiceModal';
 import { LoginPage, AuthUser } from './components/LoginPage';
@@ -618,6 +619,9 @@ export default function App() {
 
         {/* Tab 13: Why Faturathi */}
         {activeTab === 'cmp' && <WhyFaturathiView />}
+
+        {/* Tab 14: About Us / Contact Us */}
+        {activeTab === 'about' && <AboutView />}
       </main>
 
       {/* Slide-In Invoice Detail Drawer */}
@@ -640,7 +644,7 @@ export default function App() {
       />
 
       {/* Corporate Footer */}
-      <Footer />
+      <Footer onNavigateAbout={() => setActiveTab('about')} />
 
       {/* Certificate Warning Landing Modal */}
       <CertificateWarningModal

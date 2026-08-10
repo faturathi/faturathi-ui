@@ -20,7 +20,8 @@ import {
   Server,
   Building2,
   Users,
-  Sliders
+  Sliders,
+  Phone
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -133,6 +134,14 @@ export const NAV_GROUPS: NavGroup[] = [
     ar: 'لماذا فوترتي',
     primaryTab: 'cmp',
     icon: <HelpCircle className="h-4 w-4 text-emerald-600" />
+  },
+  {
+    id: 'grp_about',
+    code: 'I',
+    label: 'About / Contact',
+    ar: 'من نحن / اتصل بنا',
+    primaryTab: 'about',
+    icon: <Phone className="h-4 w-4 text-[#0d4f8b]" />
   }
 ];
 

@@ -80,6 +80,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [elasticQuery, setElasticQuery] = useState('');
   const [elasticResults, setElasticResults] = useState<ReportRow[] | null>(null);
 
+  // 10-Year Archive export/backup range (item 18: real archive export wired to the backend,
+  // not just the client-side "today's page" CSV export used elsewhere on this screen)
+  const [archiveFrom, setArchiveFrom] = useState('');
+  const [archiveTo, setArchiveTo] = useState('');
+  const [archiveExporting, setArchiveExporting] = useState(false);
+  const [archiveExportError, setArchiveExportError] = useState('');
+
   // System Logs Filter
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4'>('ALL');
 
@@ -310,6 +317,34 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
 
   const handlePrintPDF = () => {
     window.print();
+  };
+
+  // 10-Year Archive export/backup: authenticated download from the real backend endpoint
+  // (GET /api/reports/archive/export), covering up to 10 years back regardless of what's
+  // currently loaded/filtered on this page.
+  const handleArchiveExport = async () => {
+    setArchiveExporting(true);
+    setArchiveExportError('');
+    try {
+      const params = new URLSearchParams();
+      if (archiveFrom) params.set('date_from', archiveFrom);
+      if (archiveTo) params.set('date_to', archiveTo);
+      const query = params.toString();
+      const csv = await apiFetch<string>(`/api/reports/archive/export${query ? `?${query}` : ''}`);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Faturathi_Archive_${archiveFrom || '10yr'}_to_${archiveTo || 'today'}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setArchiveExportError(error instanceof Error ? error.message : 'Archive export failed.');
+    } finally {
+      setArchiveExporting(false);
+    }
   };
 
   // ElasticSearch Query Handler
@@ -855,6 +890,46 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
             <Download className="h-3.5 w-3.5" />
             <span>Download Cold Backup (.ZIP / .SQL)</span>
           </button>
+        </div>
+
+        {/* 10-Year Archive Export/Backup Range */}
+        <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3.5 space-y-2.5">
+          <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
+            <CalendarDays className="h-4 w-4 text-emerald-700" />
+            <span>Export / Backup Archived Data (up to 10 years back)</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs items-end">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">From</label>
+              <input
+                type="date"
+                value={archiveFrom}
+                onChange={(e) => setArchiveFrom(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 outline-none font-semibold text-slate-800 focus:border-emerald-600 shadow-2xs"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">To</label>
+              <input
+                type="date"
+                value={archiveTo}
+                onChange={(e) => setArchiveTo(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 outline-none font-semibold text-slate-800 focus:border-emerald-600 shadow-2xs"
+              />
+            </div>
+            <button
+              onClick={handleArchiveExport}
+              disabled={archiveExporting}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>{archiveExporting ? 'Exporting...' : 'Export Archive (.CSV)'}</span>
+            </button>
+          </div>
+          <p className="text-[10px] text-emerald-800">Leave both fields blank to export the full retained history (up to 10 years).</p>
+          {archiveExportError && (
+            <p className="text-[11px] text-red-700 font-semibold">{archiveExportError}</p>
+          )}
         </div>
 
         {/* ElasticSearch Input Form */}

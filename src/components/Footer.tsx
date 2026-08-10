@@ -1,7 +1,11 @@
 import React from 'react';
 import { NetbueLogo, FaturathiLogo } from './Logos';
 
-export const Footer: React.FC = () => {
+interface FooterProps {
+  onNavigateAbout?: () => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onNavigateAbout }) => {
   return (
     <footer className="bg-slate-900 text-slate-400 text-xs py-8 border-t border-slate-800 antialiased mt-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
@@ -24,6 +28,14 @@ export const Footer: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500">
           <p>© 2026 NETBUE LLC. All rights reserved. Demo version for pitch and evaluation purposes.</p>
           <div className="flex items-center gap-4">
+            {onNavigateAbout && (
+              <>
+                <button onClick={onNavigateAbout} className="hover:text-white transition-colors cursor-pointer underline-offset-2 hover:underline">
+                  About Us / Contact Us
+                </button>
+                <span>•</span>
+              </>
+            )}
             <span>Peppol Network Access Point</span>
             <span>•</span>
             <span>Oman Tax Authority Accredited</span>

@@ -9,9 +9,9 @@ export const API_BASE_URL = configuredApiBaseUrl.replace(/\/+$/, '');
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
   let normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  // Accept either https://host or https://host/api as the configured base.
-  // Existing callers use /api/... paths, so remove one duplicate prefix.
-  if (/\/api$/i.test(API_BASE_URL) && /^\/api(?:\/|$)/i.test(normalizedPath)) {
+  // Accept https://host, https://host/api, or https://host/api/v1 as the configured base.
+  // Existing callers use /api/... paths, so remove one duplicate /api prefix either way.
+  if (/\/api(?:\/v1)?$/i.test(API_BASE_URL) && /^\/api(?:\/|$)/i.test(normalizedPath)) {
     normalizedPath = normalizedPath.slice(4) || '/';
   }
   return `${API_BASE_URL}${normalizedPath}`;
@@ -83,8 +83,33 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     : await response.text();
   if (!response.ok) {
     const body = typeof payload === 'object' && payload ? payload as Record<string, unknown> : {};
-    const message = body.detail || body.error || body.message || `API request failed (${response.status})`;
-    throw new ApiError(response.status, String(message), payload);
+    // Backend's global exception handler wraps errors as {"error": {"code","message","fields"}};
+    // older/DRF-default responses may still use a bare "detail" string. Prefer the structured
+    // message so callers never render "[object Object]" when `error` is an object.
+    const errorBody = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : null;
+    const message = errorBody?.message || body.detail || body.message
+      || (typeof body.error === 'string' ? body.error : null)
+      || `API request failed (${response.status})`;
+    const err = new ApiError(response.status, String(message), payload);
+    notifyApiError(err);
+    throw err;
   }
   return payload as T;
+}
+
+// Lightweight global error notification hook (item 19: surface failures to the user instead of
+// only console.warn-ing them). UI layer (see ErrorBoundary.tsx / App.tsx) subscribes via
+// setApiErrorListener; if nothing has subscribed yet, errors simply fall back to the console.
+let apiErrorListener: ((error: ApiError) => void) | null = null;
+
+export function setApiErrorListener(listener: ((error: ApiError) => void) | null) {
+  apiErrorListener = listener;
+}
+
+function notifyApiError(error: ApiError) {
+  if (apiErrorListener) {
+    apiErrorListener(error);
+  } else {
+    console.warn('[api]', error.status, error.message);
+  }
 }

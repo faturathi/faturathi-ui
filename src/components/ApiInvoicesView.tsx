@@ -124,7 +124,7 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
       return (
         inv.n.toLowerCase().includes(q) ||
         inv.cp.toLowerCase().includes(q) ||
-        inv.uuid.toLowerCase().includes(q)
+        (inv.uuid && inv.uuid.toLowerCase().includes(q))
       );
     }
     return true;
@@ -355,7 +355,9 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
                       {/* Vendor */}
                       <td className="p-4">
                         <b className="text-slate-900 block font-semibold">{inv.cp}</b>
-                        <span className="text-[10px] text-slate-400 font-mono">VAT: {inv.cpv || 'OM1100654321'}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          VAT: {inv.cpv || (inv.b2c ? 'B2C — no VATIN' : '—')}
+                        </span>
                       </td>
 
                       {/* Amounts */}
@@ -368,12 +370,28 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
                         </span>
                       </td>
 
-                      {/* PINT OM Status */}
+                      {/* PINT OM Status — reflects the real validation outcome (inv.st/inv.tdd),
+                          not a hardcoded "Cleared C5" regardless of what actually happened. */}
                       <td className="p-4">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                          <ShieldCheck className="h-3 w-3 text-emerald-600" />
-                          <span>Cleared C5</span>
-                        </span>
+                        {(() => {
+                          const isRejectedDoc = inv.st === 'Rejected';
+                          const isClearedDoc = inv.st === 'Reported' || inv.st === 'Sent';
+                          const pintLabel = isRejectedDoc
+                            ? (inv.tdd || 'Rejected')
+                            : isClearedDoc ? 'Cleared C5' : (inv.tdd || inv.st || 'Pending');
+                          const pintColor = isRejectedDoc
+                            ? 'bg-red-100 text-red-800 border-red-300'
+                            : isClearedDoc
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : 'bg-amber-100 text-amber-800 border-amber-300';
+                          const PintIcon = isRejectedDoc ? XCircle : isClearedDoc ? ShieldCheck : Clock;
+                          return (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${pintColor}`}>
+                              <PintIcon className="h-3 w-3" />
+                              <span>{pintLabel}</span>
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Action Status */}

@@ -9,6 +9,58 @@ interface UploadBatchViewProps {
   invoices: Invoice[];
 }
 
+const ACCEPTED_EXTENSIONS = ['.xml', '.json', '.csv', '.xlsx'];
+
+/**
+ * Client-side content check (item 20): reject files whose real content doesn't match what
+ * they claim to be — before anything is sent to the server — with a message the user can act
+ * on immediately, rather than a generic server 400/500 after a round-trip. Files with only
+ * minor/fixable field-level issues are NOT caught here; those still go through normal
+ * server-side validation and land in the per-row error list below.
+ */
+async function sniffFile(file: File): Promise<string | null> {
+  const name = file.name.toLowerCase();
+  const ext = ACCEPTED_EXTENSIONS.find((candidate) => name.endsWith(candidate));
+  if (!ext) {
+    return `Unsupported file type. Accepted formats: ${ACCEPTED_EXTENSIONS.join(', ')}.`;
+  }
+  if (ext === '.xlsx') {
+    const header = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    const isZip = header[0] === 0x50 && header[1] === 0x4b; // 'PK' — .xlsx is a zip archive
+    if (!isZip) {
+      return 'This file is named .xlsx but its content is not a real Excel file (wrong file signature). Re-export it, or upload .csv instead.';
+    }
+    return null;
+  }
+  if (ext === '.json') {
+    try {
+      JSON.parse(await file.text());
+      return null;
+    } catch {
+      return 'This file is not valid JSON — check for a missing bracket, comma, or quote.';
+    }
+  }
+  if (ext === '.xml') {
+    const text = await file.text();
+    if (!text.trim().startsWith('<')) {
+      return 'This file is named .xml but does not start with an XML tag.';
+    }
+    if (new DOMParser().parseFromString(text, 'application/xml').getElementsByTagName('parsererror').length) {
+      return 'This XML file is not well-formed and could not be parsed.';
+    }
+    return null;
+  }
+  // .csv
+  const text = await file.text();
+  if (text.includes('\x00')) {
+    return 'This file is named .csv but contains binary data, not plain text.';
+  }
+  if (!text.trim()) {
+    return 'This CSV file is empty.';
+  }
+  return null;
+}
+
 export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed, invoices, activeTab = 'up_batch' }) => {
   const isIndividual = activeTab === 'up';
   const [isProcessing, setIsProcessing] = useState(false);
@@ -43,10 +95,23 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
     setProcessedResult(null);
     const errors: { file: string; rule: string; msg: string }[] = [];
     const items: any[] = [];
+
+    // Client-side content validation happens before anything touches the network — files that
+    // fail are reported immediately and excluded from the upload, not silently sent through.
+    const validFiles: File[] = [];
+    for (const file of files) {
+      const issue = await sniffFile(file);
+      if (issue) {
+        errors.push({ file: file.name, rule: 'file-type', msg: issue });
+      } else {
+        validFiles.push(file);
+      }
+    }
+
     try {
       setStage(1);
       const created: any[] = [];
-      for (const file of files) {
+      for (const file of validFiles) {
         try {
           if (file.name.toLowerCase().endsWith('.json')) {
             const parsed = JSON.parse(await file.text());
@@ -82,7 +147,12 @@ export const UploadBatchView: React.FC<UploadBatchViewProps> = ({ onBatchParsed,
       }
       setStage(4);
       const rejectedDocuments = created.filter((document) => document.st === 'Rejected').length;
-      setProcessedResult({ total: created.length, valid: created.length - rejectedDocuments, failed: rejectedDocuments || errors.length, errors });
+      setProcessedResult({
+        total: Math.max(created.length, files.length),
+        valid: created.length - rejectedDocuments,
+        failed: rejectedDocuments || errors.length,
+        errors,
+      });
       onBatchParsed(created);
     } catch (error) {
       setProcessedResult({ total: items.length, valid: 0, failed: items.length || 1,

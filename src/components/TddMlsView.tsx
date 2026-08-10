@@ -100,7 +100,7 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
     const matchesSearch =
       !q ||
       inv.n.toLowerCase().includes(q) ||
-      inv.uuid.toLowerCase().includes(q) ||
+      (inv.uuid && inv.uuid.toLowerCase().includes(q)) ||
       inv.cp.toLowerCase().includes(q) ||
       (inv.cpv && inv.cpv.toLowerCase().includes(q)) ||
       (inv.sourceChannel && inv.sourceChannel.toLowerCase().includes(q)) ||
@@ -549,7 +549,9 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
                       <tr key={idx} className="hover:bg-slate-50 transition-all">
                         <td className="py-3 px-3">
                           <b className="font-bold text-slate-900 block">{inv.n}</b>
-                          <span className="text-[10px] text-slate-400 font-mono">{inv.uuid.slice(0, 18)}...</span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {inv.uuid ? `${inv.uuid.slice(0, 18)}...` : 'Not yet assigned'}
+                          </span>
                         </td>
                         <td className="py-3 px-3">
                           <span className="font-semibold text-slate-800 block">{inv.dir}</span>
