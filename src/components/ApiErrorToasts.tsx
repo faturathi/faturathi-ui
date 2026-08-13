@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
-import { ApiError, setApiErrorListener } from '../lib/api';
+import { ApiError, formatApiErrors, setApiErrorListener } from '../lib/api';
 
 interface ToastEntry {
   id: number;
@@ -23,7 +23,7 @@ export const ApiErrorToasts: React.FC = () => {
     setApiErrorListener((error: ApiError) => {
       if (error.status === 401) return;
       const id = nextId.current++;
-      setToasts((prev) => [...prev, { id, message: error.message, status: error.status }]);
+      setToasts((prev) => [...prev, { id, message: formatApiErrors(error).join(' '), status: error.status }]);
       window.setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 8000);

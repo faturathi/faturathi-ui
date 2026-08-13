@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Invoice } from '../types';
-import { apiFetch } from '../lib/api';
+import { Entity, Invoice } from '../types';
+import { apiFetch, formatApiErrors } from '../lib/api';
 import { useConfirmation } from './ConfirmationDialog';
 import { validateOmanInvoice, OMAN_FIELDS } from '../lib/omanValidator';
 import { 
@@ -25,6 +25,8 @@ import {
 
 interface CreateInvoiceViewProps {
   onSubmitInvoice: (inv: any, validateAndSubmit?: boolean) => Promise<Invoice>;
+  entities: Entity[];
+  selectedEntity: string;
 }
 
 const INVALID_COMBOS: [number, number, string][] = [
@@ -46,6 +48,7 @@ interface QuickLineItem {
 
 type QuickDocumentTypeValue = '380' | '388' | '381' | '383' | '389' | '261';
 type DocumentTypeOption = { value: QuickDocumentTypeValue; icon: string; label: string; detail: string; apiKey: string };
+type CustomerRecord = { id: string; company: string; name: string; vatin: string; peppol_endpoint: string; email: string; phone: string; billing_address: string; is_walkin: boolean };
 
 const QUICK_DOCUMENT_TYPES: DocumentTypeOption[] = [
   { value: '380', icon: '📄', label: 'Standard Tax Invoice', detail: 'Code 380', apiKey: 'STANDARD_380' },
@@ -61,7 +64,7 @@ const TYPE_ICONS: Record<string, string> = {
   DEBIT_NOTE_383: '✚', SELF_BILLED_389: '📑', SELF_BILLED_CN_261: '↩️',
 };
 
-export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitInvoice }) => {
+export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitInvoice, entities, selectedEntity }) => {
   const [confirmAction, confirmationDialog] = useConfirmation();
   // Section toggle: 'quick' (Zoho Books style) vs 'technical' (73-field PINT-OM validator)
   const [activeCreationMode, setActiveCreationMode] = useState<'quick' | 'technical'>('quick');
@@ -71,6 +74,14 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   const [quickAdjustmentReason, setQuickAdjustmentReason] = useState('01 — Return of goods / price adjustment');
   const [quickApiErrors, setQuickApiErrors] = useState<string[]>([]);
   const [isSavingQuickDocument, setIsSavingQuickDocument] = useState(false);
+  const [issuerCompany, setIssuerCompany] = useState(() => selectedEntity !== 'group' ? selectedEntity : entities[0]?.id || '');
+  const isQuickB2C = quickDocumentType === '388';
+  const isQuickSelfBilled = ['389', '261'].includes(quickDocumentType);
+
+  useEffect(() => {
+    if (selectedEntity !== 'group') setIssuerCompany(selectedEntity);
+    else if (!entities.some((entity) => entity.id === issuerCompany)) setIssuerCompany(entities[0]?.id || '');
+  }, [selectedEntity, entities, issuerCompany]);
 
   useEffect(() => {
     void apiFetch<Array<{ key: string; code: string; label: string; sublabel: string }>>('/api/document-types')
@@ -85,6 +96,8 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   // ==================== QUICK INVOICE STATE ====================
   // Default option is "Custom / Walk-in Customer"
   const [quickBuyerOption, setQuickBuyerOption] = useState('custom');
+  const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [customerSaving, setCustomerSaving] = useState(false);
   const [quickBuyerName, setQuickBuyerName] = useState('Custom Walk-in Retail Customer');
   const [quickBuyerVat, setQuickBuyerVat] = useState('OM1100998877');
   const [quickBuyerEas, setQuickBuyerEas] = useState('0248:997770000099');
@@ -94,8 +107,16 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
 
   // Quick Invoice Prefix & Suffix Setup
   const [quickPrefix, setQuickPrefix] = useState('INV-2026-Q-');
-  const [quickSeq, setQuickSeq] = useState('9941');
+  const [quickSeq, setQuickSeq] = useState('0001');
   const [quickSuffix, setQuickSuffix] = useState('/OM');
+
+  useEffect(() => {
+    const company = entities.find((entity) => entity.id === issuerCompany);
+    if (!company) return;
+    setQuickPrefix(company.invoicePrefix || 'INV-');
+    setQuickSuffix(company.invoiceSuffix || '');
+    setQuickSeq(String(company.nextInvoiceNumber || 1).padStart(4, '0'));
+  }, [entities, issuerCompany]);
 
   const getQuickFullInvNumber = () => `${quickPrefix}${quickSeq}${quickSuffix}`;
   const [quickIssueDate, setQuickIssueDate] = useState(new Date().toISOString().split('T')[0]);
@@ -125,34 +146,23 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
 
   const handleQuickBuyerSelect = (val: string) => {
     setQuickBuyerOption(val);
+    const customer = customers.find((item) => item.id === val);
+    if (customer) {
+      setQuickBuyerName(customer.name); setQuickBuyerVat(customer.vatin || '');
+      setQuickBuyerEas(customer.peppol_endpoint || ''); setQuickBuyerAddress(customer.billing_address || '');
+      setQuickBuyerContact([customer.phone, customer.email].filter(Boolean).join(' | '));
+      return;
+    }
     if (val === 'custom') {
-      setQuickBuyerName('Custom Walk-in Retail Customer');
-      setQuickBuyerVat('OM1100998877');
-      setQuickBuyerEas('0248:997770000099');
+      setQuickBuyerName('Cash Customer');
+      setQuickBuyerVat('');
+      setQuickBuyerEas('');
       setQuickBuyerAddress('Way 3505, Building 14, Ruwi, Muscat');
       setQuickBuyerContact('+968 9123 4567 | walkin@customer.om');
       setQuickPlaceOfDelivery('Muscat Main Retail Store Counter');
-    } else if (val === 'muscat_retail') {
-      setQuickBuyerName('Muscat Retail SAOC');
-      setQuickBuyerVat('OM1100654321');
-      setQuickBuyerEas('0248:OM1100654321');
-      setQuickBuyerAddress('Way 2040, Al Khuwair, Muscat');
-      setQuickBuyerContact('+968 2455 1122 | info@muscatretail.om');
-      setQuickPlaceOfDelivery('Al Khuwair Main Warehouse');
-    } else if (val === 'gulf_logistics') {
-      setQuickBuyerName('Gulf IT Logistics LLC');
-      setQuickBuyerVat('OM1100998877');
-      setQuickBuyerEas('0248:OM1100998877');
-      setQuickBuyerAddress('Raysut Industrial Zone, Salalah');
-      setQuickBuyerContact('+968 2311 4455 | ops@gulflogistics.om');
-      setQuickPlaceOfDelivery('Salalah Port Freezone Gate 3');
-    } else if (val === 'oman_oilfield') {
-      setQuickBuyerName('Oman Oilfield Services SAOC');
-      setQuickBuyerVat('OM1100223344');
-      setQuickBuyerEas('0248:OM1100223344');
-      setQuickBuyerAddress('Mina Al Fahal, Muscat');
-      setQuickBuyerContact('+968 2467 9900 | supply@omanoilfield.om');
-      setQuickPlaceOfDelivery('Fahal Logistics Base');
+    } else if (val === 'new') {
+      setQuickBuyerName(''); setQuickBuyerVat(''); setQuickBuyerEas('');
+      setQuickBuyerAddress(''); setQuickBuyerContact(''); setQuickPlaceOfDelivery('');
     }
   };
 
@@ -197,6 +207,10 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   const handleQuickSubmit = async (e: React.FormEvent, isDirectDispatch = false) => {
     e.preventDefault();
     setQuickApiErrors([]);
+    if (!issuerCompany) {
+      setQuickApiErrors(['supplier company: Select the legal company issuing or receiving this document.']);
+      return;
+    }
     setIsSavingQuickDocument(true);
     const formattedLines: [string, number, string, string][] = quickLines.map(l => [
       l.name,
@@ -222,29 +236,52 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
       billingReferenceNumber: quickBillingReference || undefined,
       notes: ['381', '383', '261'].includes(quickDocumentType) ? quickAdjustmentReason : '',
       dir: ['389', '261'].includes(quickDocumentType) ? 'Inbound (AP)' : 'Outbound (AR)',
-      cp: quickBuyerName || 'Custom Walk-in Retail Customer',
-      cpv: quickBuyerVat || 'OM1100998877',
-      eas: quickBuyerEas,
+      cp: quickBuyerName || (isQuickB2C ? 'Cash Customer' : ''),
+      cpv: isQuickB2C ? '' : quickBuyerVat,
+      eas: isQuickB2C ? '' : quickBuyerEas,
       net: quickSubtotalNet,
       vat: quickVatTotal,
       st_internal: 'DRAFT',
       tt: quickDocumentType === '388' ? '11000000000000000000' : ['381', '383', '261'].includes(quickDocumentType) ? '10100000000000000000' : '10000000000000000000',
       cat: quickLines[0]?.vatCat || 'S 5%',
-      ent: 'E1',
+      ent: issuerCompany,
       lines: formattedLines,
       b2c: quickDocumentType === '388'
     };
     try {
       if (isDirectDispatch && !await confirmAction({ title: 'Submit document to Peppol?', description: `${newInv.type} · ${newInv.n}`, detail: 'After successful transmission, this document cannot be edited or deleted. Verify the customer, tax totals, document profile, and line items.', confirmLabel: 'Submit to Peppol', kind: 'submit' })) return;
       await onSubmitInvoice(newInv, isDirectDispatch);
+      setQuickSeq((current) => /^\d+$/.test(current)
+        ? String(Number(current) + 1).padStart(current.length, '0')
+        : current);
     } catch (error: any) {
-      const fieldErrors = error?.payload && typeof error.payload === 'object'
-        ? Object.entries(error.payload).flatMap(([field, messages]) => (Array.isArray(messages) ? messages : [messages]).map((message) => `${field}: ${String(message)}`))
-        : error?.fieldErrors?.map((item: any) => `${item.field}: ${item.message}`) || [error?.message || 'Document creation failed.'];
-      setQuickApiErrors(fieldErrors);
+      setQuickApiErrors(error?.fieldErrors?.map((item: any) => `${item.field}: ${item.message}`)
+        || formatApiErrors(error, 'Document creation failed. Please review the highlighted information.'));
     } finally {
       setIsSavingQuickDocument(false);
     }
+  };
+
+  const loadCustomers = () => apiFetch<CustomerRecord[] | { results?: CustomerRecord[] }>(`/api/customers${issuerCompany ? `?company=${encodeURIComponent(issuerCompany)}` : ''}`)
+    .then((payload) => setCustomers(Array.isArray(payload) ? payload : payload.results || []))
+    .catch(() => setCustomers([]));
+
+  useEffect(() => { if (issuerCompany) void loadCustomers(); }, [issuerCompany]);
+
+  const saveCustomer = async () => {
+    setCustomerSaving(true); setQuickApiErrors([]);
+    try {
+      const parts = quickBuyerContact.split('|').map((value) => value.trim());
+      const existing = customers.find((item) => item.id === quickBuyerOption);
+      const saved = await apiFetch<CustomerRecord>(existing ? `/api/customers/${existing.id}` : '/api/customers', {
+        method: existing ? 'PATCH' : 'POST',
+        body: JSON.stringify({ name: quickBuyerName, vatin: quickBuyerVat, peppol_endpoint: quickBuyerEas,
+          phone: parts[0] || '', email: parts[1] || '', billing_address: quickBuyerAddress,
+          is_walkin: isQuickB2C || quickBuyerOption === 'custom', company: issuerCompany }),
+      });
+      await loadCustomers(); setQuickBuyerOption(saved.id);
+    } catch (error: any) { setQuickApiErrors(formatApiErrors(error, 'Customer could not be saved.')); }
+    finally { setCustomerSaving(false); }
   };
 
   // ==================== TECHNICAL 73-FIELD ENGINE STATE ====================
@@ -264,17 +301,25 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   const [exchangeRate, setExchangeRate] = useState('');
 
   // Seller details
-  const [sellerName, setSellerName] = useState('Al Noor Trading LLC');
-  const [sellerVat, setSellerVat] = useState('OM1100123456');
-  const [sellerEas, setSellerEas] = useState('0248:OM1100123456');
+  const [sellerName, setSellerName] = useState('');
+  const [sellerVat, setSellerVat] = useState('');
+  const [sellerEas, setSellerEas] = useState('');
   const [sellerCty, setSellerCty] = useState('OM');
   const [sellerTel, setSellerTel] = useState('+968 24123456');
 
   // Buyer details
-  const [buyerName, setBuyerName] = useState('Muscat Retail SAOC');
-  const [buyerVat, setBuyerVat] = useState('OM1100654321');
-  const [buyerEas, setBuyerEas] = useState('0248:OM1100654321');
+  const [buyerName, setBuyerName] = useState('');
+  const [buyerVat, setBuyerVat] = useState('');
+  const [buyerEas, setBuyerEas] = useState('');
   const [buyerCty, setBuyerCty] = useState('OM');
+
+  useEffect(() => {
+    const company = entities.find((entity) => entity.id === issuerCompany);
+    if (!company) return;
+    setSellerName(company.name);
+    setSellerVat(company.vatin);
+    setSellerEas(company.pid || (company.vatin ? `0248:${company.vatin}` : ''));
+  }, [entities, issuerCompany]);
 
   // Line item
   const [itemName, setItemName] = useState('Networking equipment — switch 24p');
@@ -459,12 +504,13 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
     if (t === 'simplified') {
       setBuyerName('General customer');
       setBuyerVat('');
-      setBuyerEas('0248:997770000099');
+      setBuyerEas('');
       setBuyerCty('OM');
     } else if (t === 'sbi' || t === 'sbcn') {
-      setBuyerName('Al Noor Trading LLC (self-billing as buyer)');
-      setBuyerEas('0248:OM1100123456');
-      setBuyerVat('OM1100123456');
+      const company = entities.find((entity) => entity.id === issuerCompany);
+      setBuyerName(company?.name || '');
+      setBuyerEas(company?.pid || '');
+      setBuyerVat(company?.vatin || '');
     }
   };
 
@@ -472,7 +518,7 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
     setDocType('simplified');
     setBuyerName('General customer');
     setBuyerVat('');
-    setBuyerEas('0248:997770000099');
+    setBuyerEas('');
     setBuyerCty('OM');
     setItemName('Retail basket — POS MCT-01');
     setItemQty(1);
@@ -618,32 +664,14 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
             }`}
           >
             <Zap className="h-4 w-4 text-emerald-400" />
-            <span>1.) Quick Invoice (Simple Billing UI)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveCreationMode('technical')}
-            className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-2xl font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-              activeCreationMode === 'technical'
-                ? 'bg-purple-900 text-white shadow-md'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            <Sparkles className="h-4 w-4 text-purple-300" />
-            <span>2.) PINT-OM Technical Validator Engine</span>
+            <span>Create Billing Document</span>
           </button>
         </div>
 
         <div className="text-[11px] text-slate-500 font-medium px-2">
-          {activeCreationMode === 'quick' ? (
-            <span className="text-emerald-700 font-bold flex items-center gap-1">
-              <ShieldCheck className="h-4 w-4" /> Non-Technical Fast Billing for Accounting Staff
-            </span>
-          ) : (
-            <span className="text-purple-700 font-bold flex items-center gap-1">
-              <Lock className="h-4 w-4" /> 73-Field PINT OM v1.0.1 Schematron Matrix
-            </span>
-          )}
+          <span className="text-emerald-700 font-bold flex items-center gap-1">
+            <ShieldCheck className="h-4 w-4" /> Billing workspace for accounting staff
+          </span>
         </div>
       </div>
 
@@ -752,6 +780,20 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
             </div>
           ) : null}
 
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4 text-xs">
+            <label className="mb-1.5 block font-bold text-[#0d4f8b]">
+              {isQuickSelfBilled ? 'Buyer / Receiving Company *' : 'Supplier / Issuing Company *'}
+            </label>
+            <select value={issuerCompany} onChange={(event) => setIssuerCompany(event.target.value)} required
+              className="w-full rounded-xl border border-blue-200 bg-white p-2.5 font-bold text-slate-800 outline-none focus:border-blue-500">
+              <option value="">Select company</option>
+              {entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.name} · {entity.vatin}</option>)}
+            </select>
+            <p className="mt-1.5 text-[10px] text-slate-600">
+              {isQuickSelfBilled ? 'This company is the buyer. The counterparty below is the supplier.' : 'Supplier name and VAT details are loaded from this company record.'}
+            </p>
+          </div>
+
           {/* Customer & Invoice Header Details */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
             {/* Buyer Select & Details */}
@@ -759,10 +801,10 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
               <div className="flex items-center justify-between">
                 <label className="font-bold text-slate-800 flex items-center gap-1.5">
                   <Building2 className="h-4 w-4 text-[#0d4f8b]" />
-                  <span>Customer / Buyer Account Selection:</span>
+                  <span>{isQuickSelfBilled ? 'Supplier / Seller Selection:' : 'Customer / Buyer Selection:'}</span>
                 </label>
                 <span className="text-[10px] bg-blue-100 text-[#0d4f8b] font-bold px-2 py-0.5 rounded-md">
-                  Default: Custom / Walk-in Customer
+                  {isQuickB2C ? 'Cash customer — VAT and Peppol ID not required' : 'Select a saved party or add a new customer'}
                 </span>
               </div>
 
@@ -771,20 +813,21 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                 onChange={(e) => handleQuickBuyerSelect(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 outline-none focus:border-blue-500 font-bold"
               >
-                <option value="custom">👤 Custom / Walk-in Customer (Manual Entry)</option>
-                <option value="muscat_retail">🏢 Muscat Retail SAOC (OM1100654321)</option>
-                <option value="gulf_logistics">🚚 Gulf IT Logistics LLC (OM1100998877)</option>
-                <option value="oman_oilfield">🛢️ Oman Oilfield Services SAOC (OM1100223344)</option>
+                <option value="custom">👤 Cash / Walk-in Customer</option>
+                <option value="new">＋ Add New Customer</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>{customer.name} {customer.vatin ? `(${customer.vatin})` : ''}</option>
+                ))}
               </select>
 
               {/* Manual Customer Details (Editable when Custom/Walk-in or custom overridden) */}
               <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2.5">
                 <b className="text-[11px] font-bold text-slate-700 block border-b border-slate-100 pb-1">
-                  {quickBuyerOption === 'custom' ? 'Manual Walk-in Customer Details (All Editable):' : 'Customer Account Profile Details:'}
+                  {quickBuyerOption === 'custom' ? 'Cash / Walk-in Customer Details:' : quickBuyerOption === 'new' ? 'New Customer Details:' : 'Customer Account Profile Details:'}
                 </b>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Customer Name *</label>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">{isQuickSelfBilled ? 'Supplier Name' : 'Customer Name'} *</label>
                     <input
                       type="text"
                       value={quickBuyerName}
@@ -794,8 +837,8 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-semibold text-slate-900"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">OM VAT ID (TAX Registration)</label>
+                  {!isQuickB2C && <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">OM VAT ID (Tax Registration)</label>
                     <input
                       type="text"
                       value={quickBuyerVat}
@@ -803,7 +846,7 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                       placeholder="OM1100998877 (Optional if consumer)"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono font-bold text-slate-800"
                     />
-                  </div>
+                  </div>}
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Contact Phone &amp; Email</label>
                     <input
@@ -814,7 +857,7 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-800"
                     />
                   </div>
-                  <div>
+                  {!isQuickB2C && <div>
                     <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Electronic Address (EAS / Peppol ID)</label>
                     <input
                       type="text"
@@ -823,7 +866,7 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                       placeholder="0248:997770000099"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-slate-800"
                     />
-                  </div>
+                  </div>}
                   <div className="sm:col-span-2">
                     <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Customer Billing Address</label>
                     <input
@@ -843,6 +886,12 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
                       placeholder="Muscat Retail Main Counter / Salalah Branch Free Zone"
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs text-slate-800"
                     />
+                  </div>
+                  <div className="sm:col-span-2 flex justify-end border-t border-slate-100 pt-2">
+                    <button type="button" onClick={saveCustomer} disabled={customerSaving}
+                      className="rounded-lg bg-[#0d4f8b] px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50">
+                      {customerSaving ? 'Saving customer...' : customers.some((item) => item.id === quickBuyerOption) ? 'Update Customer' : 'Save New Customer'}
+                    </button>
                   </div>
                 </div>
               </div>

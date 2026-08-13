@@ -24,7 +24,7 @@ import {
 interface ApiInvoicesViewProps {
   invoices: Invoice[];
   onSelectInvoice: (inv: Invoice) => void;
-  onApproveAp: (invNum: string) => void;
+  onApproveAp: (invNum: string) => Promise<Invoice>;
   maskAmounts?: boolean;
 }
 
@@ -47,7 +47,7 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
   maskAmounts = false
 }) => {
   // Filter for Inbound / AP invoices
-  const apInvoices = invoices.filter(i => i.dir === 'Inbound (AP)' || i.dir === 'Inbound' || i.n.includes('AP') || i.ap);
+  const apInvoices = invoices.filter(i => i.dir === 'Inbound (AP)' || i.n.includes('AP') || i.ap || i.apStatus);
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected' | 'query'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -81,6 +81,8 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
 
   // Modal State for ERP Acceptance Confirmation
   const [acceptModalInvoice, setAcceptModalInvoice] = useState<Invoice | null>(null);
+  const [approvalPending, setApprovalPending] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const getStatusBadge = (inv: Invoice) => {
     const invNum = inv.n;
@@ -91,7 +93,7 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
         icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
       };
     }
-    if (rejectedInvoices[invNum]) {
+    if (rejectedInvoices[invNum] || inv.st === 'Rejected' || (inv.ap || inv.apStatus || '').toLowerCase().includes('reject')) {
       return {
         label: 'Rejected over Peppol',
         color: 'bg-red-100 text-red-800 border-red-300',
@@ -130,13 +132,21 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
     return true;
   });
 
-  const handleConfirmAccept = (inv: Invoice) => {
-    onApproveAp(inv.n);
-    setAcceptedInvoices(prev => ({
-      ...prev,
-      [inv.n]: `Posted to SAP S/4HANA AP Ledger on ${new Date().toLocaleTimeString()}`
-    }));
-    setAcceptModalInvoice(null);
+  const handleConfirmAccept = async (inv: Invoice) => {
+    setApprovalPending(true);
+    setActionError('');
+    try {
+      await onApproveAp(inv.n);
+      setAcceptedInvoices(prev => ({
+        ...prev,
+        [inv.n]: `Posted to ERP on ${new Date().toLocaleTimeString()}`
+      }));
+      setAcceptModalInvoice(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'The AP document could not be approved.');
+    } finally {
+      setApprovalPending(false);
+    }
   };
 
   const handleConfirmReject = () => {
@@ -417,7 +427,7 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Accept Button */}
                           <button
-                            onClick={() => setAcceptModalInvoice(inv)}
+                            onClick={() => { setActionError(''); setAcceptModalInvoice(inv); }}
                             disabled={isAccepted}
                             className={`px-2.5 py-1.5 rounded-xl font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1 ${
                               isAccepted
@@ -504,11 +514,13 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
             <p className="text-xs text-slate-600 leading-relaxed">
               Accepting this invoice will post it directly into your configured ERP System (SAP S/4HANA / Oracle Cloud) Accounts Payable subledger and mark the Peppol Message Level Response (MLS) as <b>AP (Accepted)</b>.
             </p>
+            {actionError && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">{actionError}</div>}
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setAcceptModalInvoice(null)}
+                onClick={() => { setAcceptModalInvoice(null); setActionError(''); }}
+                disabled={approvalPending}
                 className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
               >
                 Cancel
@@ -516,10 +528,11 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleConfirmAccept(acceptModalInvoice)}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1.5 shadow-sm"
+                disabled={approvalPending}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1.5 shadow-sm"
               >
                 <Check className="h-4 w-4" />
-                <span>Confirm ERP Posting</span>
+                <span>{approvalPending ? 'Posting…' : 'Confirm ERP Posting'}</span>
               </button>
             </div>
           </div>

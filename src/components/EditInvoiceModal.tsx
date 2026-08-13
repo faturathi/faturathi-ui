@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Invoice } from '../types';
+import { Entity, Invoice } from '../types';
+import { formatApiErrors } from '../lib/api';
 import { useConfirmation } from './ConfirmationDialog';
 import { 
   X, 
@@ -24,6 +25,7 @@ interface EditInvoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveAndResend: (updatedInvoice: Invoice) => void | Promise<void>;
+  entities: Entity[];
 }
 
 type EditInvoiceModalContentProps = Omit<EditInvoiceModalProps, 'invoice' | 'isOpen'> & { invoice: Invoice };
@@ -31,7 +33,8 @@ type EditInvoiceModalContentProps = Omit<EditInvoiceModalProps, 'invoice' | 'isO
 const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
   invoice,
   onClose,
-  onSaveAndResend
+  onSaveAndResend,
+  entities
 }) => {
   const [confirmAction, confirmationDialog] = useConfirmation();
   // Form State initialized from preloaded invoice data
@@ -45,8 +48,10 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
   const [buyerName, setBuyerName] = useState(invoice.cp);
   const [buyerVat, setBuyerVat] = useState(invoice.cpv);
   const [buyerEas, setBuyerEas] = useState(invoice.eas);
-  const [entityId, setEntityId] = useState(invoice.ent || 'E1');
-  const [sellerVat, setSellerVat] = useState(invoice.sVat || 'OM1100123456');
+  const [entityId, setEntityId] = useState(
+    entities.find((entity) => entity.id === invoice.ent || entity.short_code === invoice.ent)?.id || invoice.ent || ''
+  );
+  const [sellerVat] = useState(invoice.sVat || '');
   const [billingReference, setBillingReference] = useState(invoice.cn || '');
   const [adjustmentReason, setAdjustmentReason] = useState(invoice.notes || '');
 
@@ -73,7 +78,10 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
   const isBuyerNameValid = (n: string) => n.trim().length >= 3;
   const isInvoiceNumValid = (num: string) => num.trim().length >= 3;
 
-  const buyerVatError = !isVatValid(buyerVat);
+  const isB2C = invoice.b2c || invoice.documentType === 'SIMPLIFIED_B2C' || /simplified/i.test(docType);
+  const isSelfBilled = direction === 'Inbound (AP)' || /self-billed/i.test(docType);
+  const partyLabel = isSelfBilled ? 'Supplier' : 'Customer / Buyer';
+  const buyerVatError = !isB2C && !isVatValid(buyerVat);
   const buyerNameError = !isBuyerNameValid(buyerName);
   const invoiceNumError = !isInvoiceNumValid(invoiceNumber);
   const validationErrors = invoice.validationErrors || [];
@@ -120,7 +128,7 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
     e.preventDefault();
 
     if (buyerVatError) {
-      setCustomError('Buyer VATIN must be "OM11" followed by exactly 8 digits (12 characters), e.g. OM1100123456. Enter the registered VATIN before re-submitting.');
+      setCustomError(`${partyLabel} VATIN must be "OM11" followed by exactly 8 digits (12 characters), e.g. OM1100123456.`);
       return;
     }
 
@@ -151,8 +159,8 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
         type: docType,
         dir: direction,
         cp: buyerName,
-        cpv: buyerVat,
-        eas: buyerEas.includes(':') ? buyerEas : `0248:${buyerVat}`,
+        cpv: isB2C ? '' : buyerVat,
+        eas: isB2C ? '' : (buyerEas.includes(':') ? buyerEas : `0248:${buyerVat}`),
         net: calculatedNet,
         vat: calculatedVat,
         st: 'Reported', // Cleared & Reported
@@ -175,7 +183,7 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
         onClose();
       }, 1200);
     } catch (error) {
-      setCustomError(error instanceof Error ? error.message : 'Invoice update failed.');
+      setCustomError(formatApiErrors(error, 'The document could not be updated. Please correct the highlighted fields and try again.').join('\n'));
     } finally {
       setIsSubmitting(false);
     }
@@ -306,15 +314,18 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Issuer Entity Group</label>
+                  <label className="block font-bold text-slate-700 mb-1">{isSelfBilled ? 'Receiving Company' : 'Supplier / Issuing Company'}</label>
                   <select
                     value={entityId}
                     onChange={(e) => setEntityId(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-xs outline-none focus:border-blue-500 font-medium"
                   >
-                    <option value="E1">E1 — International Intelligence Solutions (OM1100123456)</option>
-                    <option value="E2">E2 — Aji Alibri Enterprises (OM1100223344)</option>
-                    <option value="E3">E3 — Alfaris Business Solutions (OM1100334455)</option>
+                    <option value="">Select company</option>
+                    {entities.map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {entity.short_code ? `${entity.short_code} — ` : ''}{entity.name} ({entity.vatin})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -338,7 +349,7 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                 <h3 className="text-xs font-bold text-[#0d4f8b] uppercase tracking-wider flex items-center gap-1.5">
                   <Building2 className="h-4 w-4" />
-                  <span>2. Buyer / Counterparty Party Details</span>
+                  <span>2. {partyLabel} Details</span>
                 </h3>
                 {buyerVatError && (
                   <span className="px-2 py-0.5 bg-red-100 text-red-800 text-[10px] font-bold rounded-md border border-red-300 flex items-center gap-1">
@@ -352,7 +363,7 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
                 {/* Buyer Legal Name */}
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    Buyer Legal Name (BT-44)*
+                    {partyLabel} Legal Name *
                   </label>
                   <input
                     type="text"
@@ -371,11 +382,11 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
                   )}
                 </div>
 
-                {/* Buyer VATIN — CRITICAL HIGHLIGHT FIELD */}
-                <div>
+                {/* VAT and Peppol identifiers are not required for cash/B2C documents. */}
+                {!isB2C && <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block font-bold text-slate-700">
-                      Buyer VAT Registration № (BT-48)*
+                      {partyLabel} VAT Registration No. *
                     </label>
                     {buyerVatError && (
                       <button
@@ -412,10 +423,10 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
                       <CheckCircle2 className="h-3 w-3" /> Valid Oman VATIN syntax
                     </span>
                   )}
-                </div>
+                </div>}
 
                 {/* Peppol Endpoint EAS */}
-                <div>
+                {!isB2C && <div>
                   <label className="block font-bold text-slate-700 mb-1">
                     Peppol Endpoint ID / EAS (BT-49-EAS)
                   </label>
@@ -426,7 +437,10 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
                     className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-mono text-xs outline-none focus:border-blue-500"
                   />
                   <span className="text-[10px] text-slate-500 block mt-1">Scheme 0248 = Oman Tax Authority Registry</span>
-                </div>
+                </div>}
+                {isB2C && <div className="sm:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+                  Cash/B2C simplified invoices do not require a VATIN or Peppol endpoint.
+                </div>}
               </div>
             </div>
 
@@ -583,7 +597,7 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
               className={`w-full sm:w-auto px-5 py-2.5 font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer ${
                 buyerVatError || billingReferenceError
                   ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
-                  : 'bg-gradient-to-r from-blue-700 to-emerald-700 hover:from-blue-800 hover:to-emerald-800 text-white'
+                  : 'bg-gradient-to-r from-emerald-600 to-green-700 hover:from-emerald-700 hover:to-green-800 text-white'
               }`}
             >
               {isSubmitting ? (
@@ -621,5 +635,13 @@ const EditInvoiceModalContent: React.FC<EditInvoiceModalContentProps> = ({
 
 export const EditInvoiceModal: React.FC<EditInvoiceModalProps> = (props) => {
   if (!props.isOpen || !props.invoice) return null;
-  return <EditInvoiceModalContent key={props.invoice.id || props.invoice.n} invoice={props.invoice} onClose={props.onClose} onSaveAndResend={props.onSaveAndResend} />;
+  return (
+    <EditInvoiceModalContent
+      key={props.invoice.id || props.invoice.n}
+      invoice={props.invoice}
+      onClose={props.onClose}
+      onSaveAndResend={props.onSaveAndResend}
+      entities={props.entities}
+    />
+  );
 };

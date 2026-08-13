@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Database, ShieldCheck, FileSpreadsheet, Search, Filter, Printer, ArrowUpDown, ChevronLeft, ChevronRight, AlertCircle, CheckCircle2, Clock, FileText, SearchCheck, Calendar, RotateCcw, CalendarDays } from 'lucide-react';
-import { apiFetch, unwrapList } from '../lib/api';
+import { apiFetch, formatApiErrors, unwrapList } from '../lib/api';
 
 interface ReportsViewProps {
   activeTab?: string;
@@ -84,165 +84,59 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   // not just the client-side "today's page" CSV export used elsewhere on this screen)
   const [archiveFrom, setArchiveFrom] = useState('');
   const [archiveTo, setArchiveTo] = useState('');
+  const [archiveFormat, setArchiveFormat] = useState<'csv' | 'json' | 'sql' | 'pgdump'>('csv');
   const [archiveExporting, setArchiveExporting] = useState(false);
   const [archiveExportError, setArchiveExportError] = useState('');
+  const [archivePurpose, setArchivePurpose] = useState('Regulatory audit / internal review');
 
   // System Logs Filter
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4'>('ALL');
 
-  // Sample report dataset
-  const [reportData, setReportData] = useState<ReportRow[]>([
-    {
-      id: '1',
-      num: 'INV-2026-07-0012',
-      date: '2026-07-28',
-      time: '14:22:10',
-      docType: 'AR Invoice',
-      counterparty: 'Muscat Retail SAOC',
-      vatin: 'OM1100654321',
-      netAmt: 1450.000,
-      vatAmt: 72.500,
-      totalAmt: 1522.500,
-      status: 'Cleared',
-      hash: 'sha256-8a9012f451b...'
-    },
-    {
-      id: '2',
-      num: 'INV-2026-07-0011',
-      date: '2026-07-27',
-      time: '11:15:00',
-      docType: 'AR Invoice',
-      counterparty: 'Sohar Logistics LLC',
-      vatin: 'OM1100882211',
-      netAmt: 3200.000,
-      vatAmt: 160.000,
-      totalAmt: 3360.000,
-      status: 'Cleared',
-      hash: 'sha256-9b1248c891a...'
-    },
-    {
-      id: '3',
-      num: 'CN-2026-07-0004',
-      date: '2026-07-26',
-      time: '16:05:30',
-      docType: 'Credit Note',
-      counterparty: 'Muscat Retail SAOC',
-      vatin: 'OM1100654321',
-      netAmt: -120.000,
-      vatAmt: -6.000,
-      totalAmt: -126.000,
-      status: 'Cleared',
-      hash: 'sha256-128491a0f5c...'
-    },
-    {
-      id: '4',
-      num: 'AP-2026-07-0988',
-      date: '2026-07-25',
-      time: '09:40:12',
-      docType: 'AP Invoice',
-      counterparty: 'Oman Cables Industry SAOG',
-      vatin: 'OM1100994433',
-      netAmt: 8500.000,
-      vatAmt: 425.000,
-      totalAmt: 8925.000,
-      status: 'Cleared',
-      hash: 'sha256-7c0012e88a2...'
-    },
-    {
-      id: '5',
-      num: 'DN-2026-07-0002',
-      date: '2026-07-24',
-      time: '10:12:44',
-      docType: 'Debit Note',
-      counterparty: 'Dhofar Trading Co',
-      vatin: 'OM1100445566',
-      netAmt: 450.000,
-      vatAmt: 22.500,
-      totalAmt: 472.500,
-      status: 'Pending OTA',
-      hash: 'sha256-3f1109a823b...'
-    },
-    {
-      id: '6',
-      num: 'SBI-2026-07-0001',
-      date: '2026-07-23',
-      time: '15:55:00',
-      docType: 'Self-Billed',
-      counterparty: 'Salalah Port Logistics',
-      vatin: 'OM1100334455',
-      netAmt: 12000.000,
-      vatAmt: 600.000,
-      totalAmt: 12600.000,
-      status: 'Cleared',
-      hash: 'sha256-01824a9912c...'
-    },
-    {
-      id: '7',
-      num: 'INV-2026-07-0009',
-      date: '2026-07-22',
-      time: '13:00:21',
-      docType: 'AR Invoice',
-      counterparty: 'Al Batinah Hypermarket LLC',
-      vatin: 'OM1100771122',
-      netAmt: 890.500,
-      vatAmt: 44.525,
-      totalAmt: 935.025,
-      status: 'Rejected',
-      errorCode: 'IBR-003-OM: Missing Buyer Tax Identification Number',
-      hash: 'sha256-5a1129b004d...'
-    },
-    {
-      id: '8',
-      num: 'INV-2026-07-0008',
-      date: '2026-07-20',
-      time: '11:10:05',
-      docType: 'AR Invoice',
-      counterparty: 'Gulf Equipment Services',
-      vatin: 'OM1100556677',
-      netAmt: 2100.000,
-      vatAmt: 105.000,
-      totalAmt: 2205.000,
-      status: 'Archived',
-      hash: 'sha256-9a2244f001e...'
-    }
-  ]);
+  const [reportData, setReportData] = useState<ReportRow[]>([]);
 
   // System logs dataset
-  const [systemLogs, setSystemLogs] = useState<any[]>([
-    { time: '2026-08-01 14:32:01', level: 'AS4', src: 'C2 Gateway', msg: 'Peppol AS4 transmission outbound receipt verified. Message ID: 20260801-143201-9812@faturathi.om' },
-    { time: '2026-08-01 14:30:15', level: 'INFO', src: 'REST API', msg: 'POST /api/v1/invoices/validate — 200 OK (Execution time: 14ms)' },
-    { time: '2026-08-01 14:15:22', level: 'WARN', src: 'SFTP Watcher', msg: 'Batch file Oman_Batch_20260801.csv contains 1 row with missing Seller EAS prefix. Auto-defaulted to 0248.' },
-    { time: '2026-08-01 13:50:00', level: 'ERROR', src: 'Validation Engine', msg: 'Rule IBR-003-OM violated on INV-2026-07-0009: Buyer VAT ID format invalid.' },
-    { time: '2026-08-01 12:10:44', level: 'INFO', src: 'Secondary DB', msg: 'AES-256 Write-Once-Read-Many (WORM) snapshot synchronized to Oman Cloud Cold Vault.' }
-  ]);
+  const [systemLogs, setSystemLogs] = useState<any[]>([]);
+  const [loadError, setLoadError] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    void Promise.all([
+    void Promise.allSettled([
       apiFetch<any[]>('/api/reports/tax-grid'),
       apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100'),
-    ]).then(([rows, logPayload]) => {
-      setReportData(rows.map((row) => ({
+    ]).then(([reportResult, logResult]) => {
+      const errors: string[] = [];
+      const rows = reportResult.status === 'fulfilled' ? reportResult.value : [];
+      const logPayload = logResult.status === 'fulfilled' ? logResult.value : [];
+      if (reportResult.status === 'rejected') errors.push(...formatApiErrors(reportResult.reason, 'Tax reports could not be loaded.'));
+      if (logResult.status === 'rejected') errors.push(...formatApiErrors(logResult.reason, 'Audit logs could not be loaded.'));
+      setReportData((Array.isArray(rows) ? rows : []).map((row) => ({
         id: row.id || row.invoice_number,
-        num: row.invoice_number,
-        date: row.date,
+        num: String(row.invoice_number || ''),
+        date: String(row.date || ''),
         time: row.time || '00:00:00',
-        docType: row.direction === 'AP' ? 'AP Invoice' : row.type?.includes('Credit') ? 'Credit Note' : 'AR Invoice',
-        counterparty: row.counterparty,
-        vatin: row.counterparty_vatin,
-        netAmt: row.net,
-        vatAmt: row.vat,
-        totalAmt: row.total,
+        docType: row.type?.includes('Credit') ? 'Credit Note'
+          : row.type?.includes('Debit') ? 'Debit Note'
+          : row.type?.includes('Self-Billed') ? 'Self-Billed'
+          : row.direction === 'AP' ? 'AP Invoice' : 'AR Invoice',
+        counterparty: String(row.counterparty || '—'),
+        vatin: String(row.counterparty_vatin || ''),
+        netAmt: Number(row.net || 0),
+        vatAmt: Number(row.vat || 0),
+        totalAmt: Number(row.total || 0),
         status: row.status === 'Reported' ? 'Cleared' : row.status === 'Rejected' ? 'Rejected' : 'Pending OTA',
         errorCode: row.error,
         hash: row.uuid || '',
       })));
       setSystemLogs(unwrapList(logPayload).map((log) => ({
         time: log.created_at,
-        level: log.action?.includes('ERROR') ? 'ERROR' : log.entity === 'Transmission' ? 'AS4' : 'INFO',
+        level: String(log.detail?.level || '').toUpperCase() === 'WARNING' ? 'WARN'
+          : String(log.detail?.level || '').toUpperCase() || (log.action?.includes('ERROR') ? 'ERROR' : log.entity === 'Transmission' ? 'AS4' : 'INFO'),
         src: log.entity || 'API',
-        msg: `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`,
+        msg: String(log.detail?.message || `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`),
       })));
-    }).catch((error) => console.warn('Report loading failed:', error));
+      setLoadError(errors.join(' '));
+    }).catch((error) => setLoadError(formatApiErrors(error, 'Reports and audit logs could not be loaded.').join(' ')))
+      .finally(() => setIsLoading(false));
   }, []);
 
   // Filtering & Sorting
@@ -285,6 +179,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   // Pagination calculations
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const latestRejected = reportData.find((row) => row.status === 'Rejected');
 
   const handleSort = (field: 'date' | 'num' | 'totalAmt' | 'status') => {
     if (sortField === field) {
@@ -329,13 +224,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
       const params = new URLSearchParams();
       if (archiveFrom) params.set('date_from', archiveFrom);
       if (archiveTo) params.set('date_to', archiveTo);
+      params.set('format', archiveFormat);
+      params.set('purpose', archivePurpose);
       const query = params.toString();
       const csv = await apiFetch<string>(`/api/reports/archive/export${query ? `?${query}` : ''}`);
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const mime = archiveFormat === 'json' ? 'application/json' : archiveFormat === 'csv' ? 'text/csv' : 'application/sql';
+      const extension = archiveFormat === 'json' ? 'json' : archiveFormat === 'csv' ? 'csv' : 'sql';
+      const blob = new Blob([csv], { type: `${mime};charset=utf-8;` });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `Faturathi_Archive_${archiveFrom || '10yr'}_to_${archiveTo || 'today'}.csv`);
+      link.setAttribute('download', `Faturathi_Archive_${archiveFrom || '10yr'}_to_${archiveTo || 'today'}.${extension}`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -366,6 +265,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-800">
+          {loadError}
+        </div>
+      )}
+      {isLoading && <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs font-semibold text-blue-800">Loading tenant reports and audit logs…</div>}
       {/* Title */}
       <div>
         <h2 className="text-xl font-bold text-[#0d4f8b] flex items-center justify-between">
@@ -800,7 +705,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
       </div>
 
       {/* Rejection & Error Analysis Matrix */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-3">
+      {latestRejected && <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-3">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <AlertCircle className="h-4 w-4 text-red-600" />
           <span>OTA Rejection &amp; Validation Error Analysis Matrix</span>
@@ -808,17 +713,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
 
         <div className="p-3 bg-red-50/60 border border-red-200 rounded-xl text-xs space-y-2">
           <div className="flex items-center justify-between font-bold text-red-900">
-            <span>Recent Rejection Exception: INV-2026-07-0009</span>
-            <span className="font-mono text-[10px] bg-red-200 text-red-900 px-2 py-0.5 rounded">Error Code: IBR-003-OM</span>
+            <span>Recent Rejection: {latestRejected.num}</span>
+            <span className="font-mono text-[10px] bg-red-200 text-red-900 px-2 py-0.5 rounded">Rejected by validation / OTA</span>
           </div>
           <p className="text-slate-700 text-[11px]">
-            <b>Rule Message:</b> Buyer VAT Identification Number (<code className="font-mono font-bold">IBT-048</code>) must start with prefix 'OM' followed by 10 or 12 digits.
+            <b>Rule message:</b> {latestRejected.errorCode || 'See the document validation details and transmission log for the rejected fields.'}
           </p>
           <div className="text-[11px] text-red-800 font-semibold pt-1">
-            💡 Recommended Resolution: Edit buyer tax parameters in Customer Directory and resubmit via Data Source.
+            Review the highlighted document fields, correct them in the editor, and re-submit after validation passes.
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* System & Audit Logs Section (E.3 / D.3) */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
@@ -845,6 +750,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
         </div>
 
         <div className="bg-slate-900 rounded-2xl p-4 font-mono text-[11px] text-slate-200 space-y-2 overflow-x-auto max-h-56">
+          {systemLogs.length === 0 && <div className="py-6 text-center text-slate-400">No audit or transmission logs found for the active company scope.</div>}
           {systemLogs
             .filter(l => logLevel === 'ALL' || l.level === logLevel)
             .map((log, idx) => (
@@ -872,33 +778,23 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
 
       {/* 10-Year Secondary Database & ElasticSearch Query Engine */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Database className="h-6 w-6 text-[#0e8f6f] shrink-0" />
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">10-Year Secondary Database &amp; ElasticSearch Query</h3>
-              <p className="text-xs text-slate-500">
-                Oman Executive Regulation Article 142 compliance vault in encrypted WORM storage.
-              </p>
-            </div>
+        <div className="flex items-center gap-3">
+          <Database className="h-6 w-6 text-[#0e8f6f] shrink-0" />
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">10-Year Secondary Database &amp; ElasticSearch Query</h3>
+            <p className="text-xs text-slate-500">
+              Oman Executive Regulation Article 142 compliance vault in encrypted WORM storage.
+            </p>
           </div>
-
-          <button
-            onClick={handleExportCSV}
-            className="px-4 py-2 bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span>Download Cold Backup (.ZIP / .SQL)</span>
-          </button>
         </div>
 
-        {/* 10-Year Archive Export/Backup Range */}
+        {/* 10-Year Archive Export/Backup Range — pick a date range and format, then download */}
         <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3.5 space-y-2.5">
           <div className="flex items-center gap-2 text-xs font-bold text-emerald-900">
             <CalendarDays className="h-4 w-4 text-emerald-700" />
             <span>Export / Backup Archived Data (up to 10 years back)</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5 text-xs items-end">
             <div>
               <label className="block text-[11px] font-bold text-slate-600 mb-1">From</label>
               <input
@@ -917,16 +813,34 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
                 className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 outline-none font-semibold text-slate-800 focus:border-emerald-600 shadow-2xs"
               />
             </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Format</label>
+              <select
+                value={archiveFormat}
+                onChange={(e) => setArchiveFormat(e.target.value as typeof archiveFormat)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 outline-none font-semibold text-slate-800 focus:border-emerald-600 shadow-2xs"
+              >
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+                <option value="sql">SQL (INSERT statements)</option>
+                <option value="pgdump">pg_dump-style SQL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Request purpose</label>
+              <input value={archivePurpose} onChange={(e) => setArchivePurpose(e.target.value)} required
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 outline-none text-slate-800 focus:border-emerald-600 shadow-2xs" />
+            </div>
             <button
               onClick={handleArchiveExport}
-              disabled={archiveExporting}
+              disabled={archiveExporting || !archivePurpose.trim()}
               className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>{archiveExporting ? 'Exporting...' : 'Export Archive (.CSV)'}</span>
+              <span>{archiveExporting ? 'Preparing request...' : 'Request & Download'}</span>
             </button>
           </div>
-          <p className="text-[10px] text-emerald-800">Leave both fields blank to export the full retained history (up to 10 years).</p>
+          <p className="text-[10px] text-emerald-800">Provide an audit purpose. Leave both dates blank to request the full retained history (up to 10 years). Requests are recorded in the backend audit log.</p>
           {archiveExportError && (
             <p className="text-[11px] text-red-700 font-semibold">{archiveExportError}</p>
           )}

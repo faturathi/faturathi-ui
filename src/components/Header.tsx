@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { FaturathiLogo, NetbueLogo } from './Logos';
-import { Bell, HelpCircle, RefreshCw, X, AlertTriangle, Clock, FileText, ShieldCheck, LogOut, User, Key, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Bell, Clock, FileText, HelpCircle, LogOut, Phone, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import { AuthUser } from './LoginPage';
+import { FaturathiLogo } from './Logos';
 import { CompanyGroup, Entity } from '../types';
 
 interface HeaderProps {
@@ -19,216 +19,120 @@ interface HeaderProps {
   companyGroups: CompanyGroup[];
   selectedGroup: string;
   onSelectGroup: (groupId: string) => void;
+  onOpenAbout?: () => void;
 }
 
+const notifications = [
+  { icon: AlertTriangle, tone: 'border-red-100 bg-red-50 text-red-900', iconTone: 'text-red-600', title: 'Rejected invoice awaiting correction', detail: 'Review the OTA validation response and correct the highlighted fields.' },
+  { icon: Clock, tone: 'border-amber-100 bg-amber-50 text-amber-900', iconTone: 'text-amber-600', title: 'B2C batches approaching SLA', detail: 'Three batches are approaching the configured submission window.' },
+  { icon: FileText, tone: 'border-blue-100 bg-blue-50 text-blue-900', iconTone: 'text-blue-600', title: 'Credit note pending approval', detail: 'A draft credit note requires manager sign-off.' },
+  { icon: ShieldCheck, tone: 'border-emerald-100 bg-emerald-50 text-emerald-900', iconTone: 'text-emerald-600', title: 'PINT-OM profile active', detail: 'The current validation and UUID profile is active.' },
+];
+
 export const Header: React.FC<HeaderProps> = ({
-  selectedEntity,
-  onSelectEntity,
-  showDocs,
-  onToggleDocs,
-  onResetDb,
-  isResetting,
-  currentUser,
-  onLogout,
-  onOpenCertModal,
-  certVerified = false,
-  entities,
-  companyGroups,
-  selectedGroup,
-  onSelectGroup
+  selectedEntity, onSelectEntity, showDocs, onToggleDocs, onResetDb, isResetting,
+  currentUser, onLogout, onOpenCertModal, certVerified = false, entities,
+  companyGroups, selectedGroup, onSelectGroup, onOpenAbout,
 }) => {
   const [showBellPanel, setShowBellPanel] = useState(false);
+  const selectedGroupData = companyGroups.find((group) => group.id === selectedGroup) || companyGroups[0];
 
   return (
-    <header className="bg-gradient-to-r from-[#082f54] via-[#0d4f8b] to-[#0b7a63] text-white sticky top-0 z-50 shadow-md">
-      <div className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-col lg:flex-row items-center justify-between gap-3">
-        {/* Left: Logos & Platform Identity */}
-        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2.5">
-          <div className="flex items-center gap-2 bg-white/10 hover:bg-white/15 transition-colors px-2.5 py-1 rounded-xl border border-white/20 shadow-2xs">
-            <FaturathiLogo className="h-7 w-auto shrink-0" iconOnly={true} />
-            <div className="h-6 w-px bg-white/20"></div>
-            <div className="flex flex-col justify-center">
-              <div className="text-sm font-black tracking-tight leading-none text-white flex items-center gap-1.5">
-                <span>faturathi</span>
-                <span className="text-emerald-300 font-bold text-[9px] uppercase tracking-wider bg-emerald-950/90 px-1.5 py-0.2 rounded border border-emerald-400/40">
-                  ENTERPRISE
-                </span>
-              </div>
-              <div className="text-[10px] text-white/80 font-medium leading-tight mt-0.5 flex items-center gap-1.5">
-                <span className="text-slate-200">by NETBUE</span>
-                <span className="text-white/40">•</span>
-                <span className="text-emerald-200">OTA Accredited</span>
-                <span className="text-white/40">•</span>
-                <span className="font-arabic text-emerald-100">فوترتك.. أصبحت أسهل</span>
-              </div>
-            </div>
+    <header className="sticky top-0 z-50 bg-gradient-to-r from-[#082f54] via-[#0d4f8b] to-[#0b7a63] text-white shadow-md">
+      <div className="mx-auto grid w-full max-w-[1900px] grid-cols-1 gap-2 px-3 py-1.5 sm:px-5 xl:grid-cols-[96px_minmax(0,1fr)] xl:items-center xl:gap-3 xl:px-6">
+        <div className="flex items-center justify-center xl:justify-start">
+          <div className="rounded-xl border border-white/20 bg-white/95 px-2 py-0.5 shadow-sm">
+            <FaturathiLogo className="h-9 w-auto sm:h-10" showSlogan={false} />
           </div>
         </div>
 
-        {/* Right: Context Header + PKI Status + User + Controls */}
-        <div className="flex flex-wrap items-center justify-center lg:justify-end gap-2.5 text-xs w-full lg:w-auto">
-          {/* Certificate Warning Trigger Badge */}
-          {onOpenCertModal && (
-            <button
-              onClick={onOpenCertModal}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs ${
-                certVerified
-                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
-                  : 'bg-red-950/90 text-red-300 border-red-500/50 hover:bg-red-900 animate-pulse'
-              }`}
-              title="Click to check Faturathi Peppol PKI Certificate"
-            >
-              <ShieldAlert className={`h-4 w-4 ${certVerified ? 'text-emerald-400' : 'text-red-400'}`} />
-              <span>{certVerified ? 'PKI Handshake Active' : 'Cert Checker Warning'}</span>
-            </button>
-          )}
-
-          {/* Active User Badge & Logout Button */}
-          {currentUser && (
-            <div className="flex items-center gap-2 bg-slate-900/90 border border-emerald-400/30 px-3 py-1.5 rounded-xl shadow-2xs">
-              <div className={`h-7 w-7 rounded-lg ${currentUser.avatarColor} flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs`}>
-                {currentUser.n.charAt(0)}
-              </div>
-              <div className="text-left hidden sm:block">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-white text-xs leading-none">{currentUser.n}</span>
-                  <span className="bg-emerald-500/20 text-emerald-300 text-[9px] font-bold px-1.5 py-0.2 rounded border border-emerald-400/30">
-                    {currentUser.roleBadge}
-                  </span>
-                </div>
-                <span className="text-[10px] text-slate-300 block font-mono mt-0.5">{currentUser.e}</span>
-              </div>
-
-              <div className="h-5 w-px bg-white/20 mx-0.5"></div>
-
-              <button
-                onClick={onLogout}
-                className="p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-200 hover:text-white rounded-lg border border-red-400/30 transition-all cursor-pointer flex items-center gap-1 font-semibold text-xs"
-                title="Log out of session"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                <span className="hidden md:inline">Logout</span>
+        <div className="min-w-0 space-y-1.5 text-xs 2xl:flex 2xl:flex-row-reverse 2xl:items-center 2xl:justify-end 2xl:gap-2 2xl:space-y-0">
+          {/* Primary utilities remain on one row at desktop widths. */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 xl:justify-end 2xl:flex-nowrap">
+            {onOpenCertModal && (
+              <button onClick={onOpenCertModal} title="Check Peppol PKI certificate"
+                className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[11px] font-bold shadow-sm transition-colors ${certVerified ? 'border-emerald-500/40 bg-emerald-950/80 text-emerald-300' : 'border-red-500/50 bg-red-950/90 text-red-300'}`}>
+                <ShieldAlert className="h-4 w-4" />
+                <span className="hidden sm:inline">{certVerified ? 'PKI Handshake Active' : 'Certificate Warning'}</span>
               </button>
-            </div>
-          )}
+            )}
 
-          {/* Context Block */}
-          <div className="hidden sm:flex items-center gap-3 bg-black/20 px-3 py-1.5 rounded-xl border border-white/10">
-            <div>
-              <span className="text-[9px] uppercase tracking-wider text-white/60 block font-semibold">
-                Client / Supplier VAT Group
-              </span>
-              {companyGroups.length > 1 ? (
-                <select value={selectedGroup} onChange={(e) => onSelectGroup(e.target.value)}
-                  className="bg-slate-900/80 text-white font-semibold text-xs rounded border border-white/30 px-2 py-0.5 outline-none">
-                  {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                </select>
-              ) : <span className="font-bold text-white text-xs">{companyGroups[0]?.name || 'No business group assigned'}</span>}
-              <span className="text-[10px] text-emerald-300 block">VAT Group {companyGroups.find((g) => g.id === selectedGroup)?.group_vatin || companyGroups[0]?.group_vatin || '—'}</span>
-            </div>
+            {currentUser && (
+              <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-slate-900/90 px-2 py-1 shadow-sm">
+                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[11px] font-bold ${currentUser.avatarColor}`}>{currentUser.n.charAt(0)}</div>
+                <div className="hidden min-w-0 text-left sm:block">
+                  <div className="flex items-center gap-1.5">
+                    <span className="max-w-32 truncate text-[11px] font-bold xl:max-w-40">{currentUser.n}</span>
+                    <span className="hidden rounded border border-emerald-400/30 bg-emerald-500/20 px-1.5 text-[9px] font-bold text-emerald-300 2xl:inline">{currentUser.roleBadge}</span>
+                  </div>
+                  <span className="hidden max-w-40 truncate font-mono text-[9px] text-slate-300 lg:block">{currentUser.e}</span>
+                </div>
+                <span className="h-6 w-px bg-white/20" />
+                <button onClick={onLogout} title="Log out" className="flex items-center gap-1 rounded-lg border border-red-400/30 bg-red-500/20 p-1.5 text-red-100 transition-colors hover:bg-red-500/40">
+                  <LogOut className="h-3.5 w-3.5" /><span className="hidden 2xl:inline">Logout</span>
+                </button>
+              </div>
+            )}
 
-            <div className="h-6 w-px bg-white/20"></div>
+            {onOpenAbout && (
+              <button onClick={onOpenAbout} className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-white/20">
+                <Phone className="h-3.5 w-3.5" /><span className="hidden sm:inline">About us / Contact us</span>
+              </button>
+            )}
 
-            <div>
-              <span className="text-[9px] uppercase tracking-wider text-white/60 block font-semibold">
-                Working as Supplier
-              </span>
-              <select
-                value={selectedEntity}
-                onChange={(e) => onSelectEntity(e.target.value)}
-                className="bg-slate-900/80 text-white font-semibold text-xs rounded border border-white/30 px-2 py-0.5 outline-none cursor-pointer hover:border-white transition-colors"
-              >
-                <option value="group">Whole group — {entities.length} Supplier {entities.length === 1 ? 'Company' : 'Companies'}</option>
-                {entities.map((entity) => (
-                  <option key={entity.id} value={entity.id}>{entity.name} · {entity.vatin}</option>
-                ))}
-              </select>
+            <div className="relative">
+              <button onClick={() => setShowBellPanel((visible) => !visible)} title="Notifications" aria-expanded={showBellPanel}
+                className="relative rounded-lg border border-white/20 bg-white/10 p-2 transition-colors hover:bg-white/20">
+                <Bell className="h-4 w-4" />
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[10px] font-black text-slate-900 shadow">4</span>
+              </button>
+              {showBellPanel && (
+                <div className="fixed left-3 right-3 top-20 z-50 rounded-2xl border border-slate-200 bg-white p-4 text-left text-slate-800 shadow-2xl sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96">
+                  <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-2">
+                    <h4 className="flex items-center gap-2 text-sm font-bold text-[#0d4f8b]"><Bell className="h-4 w-4" /> Outstanding Action Items</h4>
+                    <button onClick={() => setShowBellPanel(false)} aria-label="Close notifications" className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  </div>
+                  <ul className="space-y-2 text-xs">
+                    {notifications.map(({ icon: Icon, tone, iconTone, title, detail }) => (
+                      <li key={title} className={`flex items-start gap-2 rounded-xl border p-2.5 ${tone}`}>
+                        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconTone}`} />
+                        <div><b className="block font-semibold">{title}</b><span className="text-[11px] opacity-80">{detail}</span></div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Setup Guide Button */}
-          <button
-            onClick={onToggleDocs}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-semibold border transition-all cursor-pointer ${
-              showDocs
-                ? 'bg-white/20 border-white text-white'
-                : 'bg-white/10 border-white/20 text-white/90 hover:bg-white/20'
-            }`}
-          >
-            <HelpCircle className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{showDocs ? 'Hide Setup' : 'Setup Guide'}</span>
-          </button>
-
-          {/* Reset Seeds Button */}
-          <button
-            onClick={onResetDb}
-            disabled={isResetting}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 active:bg-white/30 border border-white/20 text-white rounded-xl font-semibold transition-all disabled:opacity-50 cursor-pointer"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${isResetting ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isResetting ? 'Resetting...' : 'Reset Seeds'}</span>
-          </button>
-
-          {/* Bell Panel Trigger */}
-          <div className="relative">
-            <button
-              onClick={() => setShowBellPanel(!showBellPanel)}
-              className="relative p-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white cursor-pointer transition-all"
-              title="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="absolute -top-1 -right-1 bg-amber-400 text-slate-900 text-[10px] font-black rounded-full h-4 w-4 flex items-center justify-center shadow">
-                4
-              </span>
-            </button>
-
-            {/* Notification Bell Panel Dropdown */}
-            {showBellPanel && (
-              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white text-slate-800 rounded-2xl shadow-2xl border border-slate-200 z-50 p-4 text-left antialiased">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2">
-                  <div className="flex items-center gap-2">
-                    <Bell className="h-4 w-4 text-[#0d4f8b]" />
-                    <h4 className="font-bold text-sm text-[#0d4f8b]">Outstanding Action Items</h4>
-                  </div>
-                  <button
-                    onClick={() => setShowBellPanel(false)}
-                    className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-                <ul className="space-y-2.5 text-xs text-slate-600">
-                  <li className="flex items-start gap-2 p-2 bg-red-50 rounded-xl border border-red-100 text-red-900">
-                    <AlertTriangle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
-                    <div>
-                      <b className="font-semibold block text-red-950">1 Rejected Invoice Awaiting Correction</b>
-                      <span className="text-[11px]">INV-2026-07-0231 rejected by buyer AP — ibr-003-om seller VAT ID format.</span>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2 p-2 bg-amber-50 rounded-xl border border-amber-100 text-amber-900">
-                    <Clock className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <b className="font-semibold block text-amber-950">3 B2C Batches Approaching 24h Window</b>
-                      <span className="text-[11px]">From POS MCT-04 — submission window closes in less than 6 hours.</span>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2 p-2 bg-blue-50 rounded-xl border border-blue-100 text-blue-900">
-                    <FileText className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
-                    <div>
-                      <b className="font-semibold block text-blue-950">1 Credit Note Draft Pending Approval</b>
-                      <span className="text-[11px]">Source cancellation ref 2026/0731 requires manager sign-off.</span>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2 p-2 bg-emerald-50 rounded-xl border border-emerald-100 text-emerald-900">
-                    <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <div>
-                      <b className="font-semibold block text-emerald-950">PINT OM v1.0.1 Active</b>
-                      <span className="text-[11px]">UUIDv5 deterministic derivation &amp; Baisa-gap tolerance active in force.</span>
-                    </div>
-                  </li>
-                </ul>
+          {/* Tenant context and secondary utilities share a compact responsive row. */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 xl:justify-end 2xl:flex-nowrap">
+            <div className="hidden min-w-0 flex-1 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2.5 py-1 sm:flex xl:max-w-[620px] 2xl:w-[430px] 2xl:flex-none">
+              <div className="min-w-0 shrink-0">
+                <span className="block text-[8px] font-semibold uppercase tracking-wide text-white/60">VAT Group</span>
+                {companyGroups.length > 1 ? (
+                  <select value={selectedGroup} onChange={(event) => onSelectGroup(event.target.value)} className="max-w-32 rounded border border-white/30 bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-semibold text-white outline-none">
+                    {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select>
+                ) : <span className="block max-w-32 truncate text-[10px] font-bold">{selectedGroupData?.name || 'No group'}</span>}
+                <span className="block max-w-32 truncate text-[8px] text-emerald-300">{selectedGroupData?.group_vatin || '—'}</span>
               </div>
-            )}
+              <span className="h-8 w-px shrink-0 bg-white/20" />
+              <label className="min-w-0 flex-1">
+                <span className="block text-[8px] font-semibold uppercase tracking-wide text-white/60">Supplier company</span>
+                <select value={selectedEntity} onChange={(event) => onSelectEntity(event.target.value)} className="w-full min-w-36 cursor-pointer rounded border border-white/30 bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-semibold text-white outline-none hover:border-white">
+                  <option value="group">Whole group — {entities.length} supplier {entities.length === 1 ? 'company' : 'companies'}</option>
+                  {entities.map((entity) => <option key={entity.id} value={entity.id}>{entity.name} · {entity.vatin}</option>)}
+                </select>
+              </label>
+            </div>
+
+            <button onClick={onToggleDocs} className={`flex items-center gap-1 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${showDocs ? 'border-white bg-white/20' : 'border-white/20 bg-white/10 hover:bg-white/20'}`}>
+              <HelpCircle className="h-3.5 w-3.5" /><span className="hidden sm:inline">{showDocs ? 'Hide Setup' : 'Setup Guide'}</span>
+            </button>
+            <button onClick={onResetDb} disabled={isResetting} className="flex items-center gap-1 whitespace-nowrap rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-white/20 disabled:opacity-50">
+              <RefreshCw className={`h-3.5 w-3.5 ${isResetting ? 'animate-spin' : ''}`} /><span className="hidden sm:inline">{isResetting ? 'Resetting...' : 'Reset Seeds'}</span>
+            </button>
           </div>
         </div>
       </div>

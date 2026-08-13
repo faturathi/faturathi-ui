@@ -51,7 +51,14 @@ export interface Invoice {
   branch?: string;
   currency?: string;
   sVat?: string; // Seller VAT ID
+  sName?: string;
+  buyerName?: string;
+  buyerVat?: string;
+  apStatus?: string;
   createdAt?: string;
+  submittedAt?: string | null;
+  acknowledgedAt?: string | null;
+  reportedAt?: string | null;
   erpSystem?: ErpSystem;
   sourceChannel?: SourceChannel;
   documentType?: 'STANDARD_380' | 'SIMPLIFIED_B2C' | 'CREDIT_NOTE_381' | 'DEBIT_NOTE_383' | 'SELF_BILLED_389' | 'SELF_BILLED_CN_261';
@@ -82,6 +89,7 @@ export interface Entity {
   invoiceSuffix?: string;
   creditNotePrefix?: string;
   creditNoteSuffix?: string;
+  nextInvoiceNumber?: number;
   status: 'Registered' | 'Pending Consent' | 'Terminated';
 }
 

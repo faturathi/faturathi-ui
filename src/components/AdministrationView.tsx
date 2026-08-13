@@ -49,7 +49,9 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   };
 
   // ---------------- SETUP COMPANY STATE ----------------
-  const [setupMode, setSetupMode] = useState<'single' | 'group'>('group');
+  // Default to standalone: most entities file independently, and a group VATIN is meaningless
+  // until the user deliberately opts into a multi-entity group structure (option 2 below).
+  const [setupMode, setSetupMode] = useState<'single' | 'group'>('single');
   const [groupVatin, setGroupVatin] = useState('');
   const [groupName, setGroupName] = useState('');
   const [vatGroupError, setVatGroupError] = useState('');
@@ -57,6 +59,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [isSavingGroup, setIsSavingGroup] = useState(false);
   const [companyGroups, setCompanyGroups] = useState<any[]>([]);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [showInlineGroupCreate, setShowInlineGroupCreate] = useState(false);
   const [selectedCompanyGroup, setSelectedCompanyGroup] = useState('');
 
   const [entities, setEntities] = useState<any[]>([]);
@@ -113,12 +116,19 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
     setGroupSaveError('');
     setIsSavingGroup(true);
     try {
-      await apiFetch(editingGroupId ? `/api/company-groups/${editingGroupId}` : '/api/company-groups', {
+      const saved = await apiFetch<{ id: string }>(
+        editingGroupId ? `/api/company-groups/${editingGroupId}` : '/api/company-groups', {
         method: editingGroupId ? 'PATCH' : 'POST', body: JSON.stringify({ name: groupName.trim(), group_vatin: groupVatin.trim().toUpperCase() })
       });
       await loadEntities();
       await onEntitiesChanged?.();
       resetGroupForm();
+      if (!editing) {
+        // Just created (not edited) a group from the inline "Subsidiary/Branch" panel — select
+        // it immediately instead of leaving the user to find it in the dropdown themselves.
+        setSelectedCompanyGroup(saved.id);
+        setShowInlineGroupCreate(false);
+      }
     } catch (error) {
       const fields = getApiFieldErrors(error);
       setGroupSaveError(Object.entries(fields).flatMap(([field, messages]) => messages.map((message) => `${field}: ${message}`)).join(' ') || (error instanceof Error ? error.message : 'VAT group creation failed.'));
@@ -243,7 +253,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
     try {
       const registeredEmail = newEmail;
       const result = await onAddUser({ e: newEmail, n: newName, r: newRole, ent: newEnt, st: 'Active', ll: 'Just now' });
-      setTemporaryPassword(result?.temporaryPassword || '');
+      setTemporaryPassword(result && 'temporaryPassword' in result ? result.temporaryPassword || '' : '');
       setCredentialEmail(registeredEmail);
       setNewEmail('');
       setNewName('');
@@ -499,6 +509,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [enableAlerts, setEnableAlerts] = useState(true);
   const [enableAdminAlerts, setEnableAdminAlerts] = useState(true);
   const [adminAlertContact, setAdminAlertContact] = useState('tax-admin@iis-oman.om | +968 9988 7766');
+  const [notificationEmails, setNotificationEmails] = useState('tax-admin@iis-oman.om');
   const [allowLogin, setAllowLogin] = useState(true);
   const [enableAutoBackups, setEnableAutoBackups] = useState(true);
   const [backupRetention, setBackupRetention] = useState('7_years');
@@ -523,6 +534,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
       setDowntimeSchedule(config.maintenance_window);
       setWebhookUrl(config.webhook_url);
       setAdminAlertContact(config.admin_alert_contact);
+      setNotificationEmails((config.notification_emails || []).join(', '));
       setApiKey(config.master_api_key || 'Not configured');
     }).catch((error) => console.warn('Configuration loading failed:', error));
   }, []);
@@ -536,6 +548,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
         allow_user_logins: allowLogin, backup_retention_years: Number.parseInt(backupRetention) || 7,
         enable_auto_backups: enableAutoBackups,
         maintenance_window: downtimeSchedule, webhook_url: webhookUrl, admin_alert_contact: adminAlertContact,
+        notification_emails: notificationEmails.split(/[;,\n]/).map((email) => email.trim()).filter(Boolean),
       }) });
       alert('General configurations saved.');
     } catch (error) {
@@ -950,12 +963,40 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
             {setupMode === 'group' && (
               <div className="p-4 bg-indigo-50/50 border border-indigo-200 rounded-2xl space-y-2">
                 <label className="block text-xs font-bold text-indigo-950">Assign Existing Business Group *</label>
-                <select required value={selectedCompanyGroup} onChange={(e) => setSelectedCompanyGroup(e.target.value)}
-                  className="w-full max-w-xl bg-white border border-indigo-300 rounded-xl px-3 py-2.5 text-xs font-bold text-indigo-900 outline-none">
-                  <option value="">Select a VAT group...</option>
-                  {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name} · {group.group_vatin}</option>)}
-                </select>
-                {!companyGroups.length && <p className="text-xs font-semibold text-amber-700">No group is available. A technical administrator must create one first.</p>}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select required value={selectedCompanyGroup} onChange={(e) => setSelectedCompanyGroup(e.target.value)}
+                    className="w-full max-w-xl bg-white border border-indigo-300 rounded-xl px-3 py-2.5 text-xs font-bold text-indigo-900 outline-none">
+                    <option value="">Select a VAT group...</option>
+                    {companyGroups.map((group) => <option key={group.id} value={group.id}>{group.name} · {group.group_vatin}</option>)}
+                  </select>
+                  <button type="button" onClick={() => { resetGroupForm(); setShowInlineGroupCreate((v) => !v); }}
+                    className="whitespace-nowrap px-3 py-2.5 rounded-xl border border-indigo-300 bg-white text-xs font-bold text-indigo-700 hover:bg-indigo-50">
+                    {showInlineGroupCreate ? 'Cancel' : '+ Create new group'}
+                  </button>
+                </div>
+                {!companyGroups.length && !showInlineGroupCreate && <p className="text-xs font-semibold text-amber-700">No group is available yet — use "+ Create new group" above.</p>}
+
+                {showInlineGroupCreate && (
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-end pt-2 border-t border-indigo-200">
+                    <div>
+                      <label className="block text-[11px] font-bold text-indigo-950 mb-1">New Group Name</label>
+                      <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="e.g. VASS Business Group"
+                        className="w-full bg-white border border-indigo-300 rounded-xl px-3 py-2 text-xs font-bold" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-indigo-950 mb-1">Group VATIN (OM12 + 8 digits)</label>
+                      <input value={groupVatin} onChange={(e) => handleGroupVatinChange(e.target.value.toUpperCase())} placeholder="OM1200001234"
+                        className="w-full bg-white border border-indigo-300 rounded-xl px-3 py-2 font-mono text-xs font-bold" />
+                      {vatGroupError && <p className="mt-1 text-[11px] font-bold text-red-600">{vatGroupError}</p>}
+                    </div>
+                    <button type="button" onClick={handleSaveGroup}
+                      disabled={isSavingGroup || !groupName.trim() || !groupVatin.trim() || Boolean(vatGroupError)}
+                      className="px-4 py-2.5 bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold whitespace-nowrap">
+                      {isSavingGroup ? 'Creating...' : 'Create Group'}
+                    </button>
+                    {groupSaveError && <p className="sm:col-span-3 text-[11px] font-bold text-red-600">{groupSaveError}</p>}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1648,6 +1689,13 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                     onChange={(e) => setAdminAlertContact(e.target.value)}
                     className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-mono text-xs text-slate-800 outline-none"
                   />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Notification Email Recipients:</label>
+                  <textarea value={notificationEmails} onChange={(e) => setNotificationEmails(e.target.value)} rows={3}
+                    placeholder="finance@company.om, tax@company.om, admin@company.om"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-mono text-xs text-slate-800 outline-none" />
+                  <p className="mt-1 text-[10px] text-slate-500">Separate multiple registered recipients with commas, semicolons, or new lines.</p>
                 </div>
               </div>
 

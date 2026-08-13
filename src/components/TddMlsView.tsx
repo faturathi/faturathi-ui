@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Invoice, canEditInvoice } from '../types';
+import { Entity, Invoice, canEditInvoice } from '../types';
 import { Clock, RefreshCw, AlertTriangle, ShieldCheck, CheckCircle2, Code, Terminal, Copy, Check, Play, FileJson, Search, Filter, Layers, Edit, Send, Lock, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
 import { validateOmanInvoice, OmanValidationResult, FieldEvaluation, GROUPS_INFO } from '../lib/omanValidator';
 import { EditInvoiceModal } from './EditInvoiceModal';
@@ -9,6 +9,7 @@ interface TddMlsViewProps {
   invoices: Invoice[];
   onTriggerTddSubmit: (n: string) => void;
   onSaveAndResendInvoice?: (updatedInvoice: Invoice) => void;
+  entities: Entity[];
 }
 
 const SAMPLE_JSON_PAYLOAD = `{
@@ -71,8 +72,8 @@ const SAMPLE_JSON_PAYLOAD = `{
   ]
 }`;
 
-export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSubmit, onSaveAndResendInvoice }) => {
-  const [activeTab, setActiveTab] = useState<'tdd' | 'mls' | 'validator'>('validator');
+export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSubmit, onSaveAndResendInvoice, entities }) => {
+  const [activeTab, setActiveTab] = useState<'tdd' | 'mls' | 'validator'>('tdd');
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [jsonInput, setJsonInput] = useState<string>(SAMPLE_JSON_PAYLOAD);
   const [validationResult, setValidationResult] = useState<OmanValidationResult | null>(() => {
@@ -99,9 +100,9 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
     const q = tddSearchQuery.toLowerCase().trim();
     const matchesSearch =
       !q ||
-      inv.n.toLowerCase().includes(q) ||
+      String(inv.n || '').toLowerCase().includes(q) ||
       (inv.uuid && inv.uuid.toLowerCase().includes(q)) ||
-      inv.cp.toLowerCase().includes(q) ||
+      String(inv.cp || '').toLowerCase().includes(q) ||
       (inv.cpv && inv.cpv.toLowerCase().includes(q)) ||
       (inv.sourceChannel && inv.sourceChannel.toLowerCase().includes(q)) ||
       (inv.erpSystem && inv.erpSystem.toLowerCase().includes(q));
@@ -571,13 +572,13 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
                           </span>
                         </td>
                         <td className="py-3 px-3">
-                          {inv.st === 'Reported' ? (
+                          {inv.reportedAt || inv.acknowledgedAt ? (
                             <span className="text-emerald-700 font-bold flex items-center gap-1">
-                              <ShieldCheck className="h-3.5 w-3.5" /> Delivered in 1.4 min
+                              <ShieldCheck className="h-3.5 w-3.5" /> Delivered {new Date(inv.reportedAt || inv.acknowledgedAt || '').toLocaleString()}
                             </span>
                           ) : (
                             <span className="text-amber-700 font-bold flex items-center gap-1">
-                              <Clock className="h-3.5 w-3.5" /> 11m 45s remaining
+                              <Clock className="h-3.5 w-3.5" /> Due {new Date(new Date(inv.submittedAt || inv.createdAt || `${inv.d}T${inv.t}`).getTime() + 15 * 60 * 1000).toLocaleString()}
                             </span>
                           )}
                         </td>
@@ -707,6 +708,7 @@ export const TddMlsView: React.FC<TddMlsViewProps> = ({ invoices, onTriggerTddSu
           }
           setEditingInvoice(null);
         }}
+        entities={entities}
       />
 
       {activeTab === 'mls' && (

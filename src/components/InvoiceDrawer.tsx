@@ -9,7 +9,7 @@ interface InvoiceDrawerProps {
   onClose: () => void;
   maskAmounts: boolean;
   roleMode: RoleMode;
-  onApproveAp: (id: string) => void;
+  onApproveAp: (id: string) => Promise<Invoice>;
   onResendInvoice: (id: string) => void;
   onEditInvoice?: (inv: Invoice) => void;
 }
@@ -34,6 +34,12 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
   if (!invoice) return null;
 
   const isAp = invoice.dir === 'Inbound (AP)';
+  const supplierName = invoice.sName || (isAp ? invoice.cp : '');
+  const supplierVat = invoice.sVat || (isAp ? invoice.cpv : '');
+  const supplierEndpoint = isAp ? invoice.eas : (supplierVat ? `0248:${supplierVat}` : '');
+  const customerName = invoice.buyerName || (isAp ? '' : invoice.cp);
+  const customerVat = invoice.buyerVat || (isAp ? '' : invoice.cpv);
+  const customerEndpoint = isAp ? (customerVat ? `0248:${customerVat}` : '') : invoice.eas;
 
   const handleCopyUuid = () => {
     navigator.clipboard.writeText(invoice.uuid);
@@ -57,25 +63,25 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
     <cbc:UUID>${invoice.uuid}</cbc:UUID>
     <cac:AccountingSupplierParty>
         <cac:Party>
-            <cbc:EndpointID schemeID="0248">OM1100123456</cbc:EndpointID>
+            <cbc:EndpointID schemeID="0248">${supplierEndpoint.replace('0248:', '')}</cbc:EndpointID>
             <cac:PartyTaxScheme>
-                <cbc:CompanyID>OM1100123456</cbc:CompanyID>
+                <cbc:CompanyID>${supplierVat}</cbc:CompanyID>
                 <cac:TaxScheme><cbc:ID>VAT</cbc:TaxScheme>
             </cac:PartyTaxScheme>
             <cac:PartyLegalEntity>
-                <cbc:RegistrationName>Al Noor Trading LLC</cbc:RegistrationName>
+                <cbc:RegistrationName>${supplierName}</cbc:RegistrationName>
             </cac:PartyLegalEntity>
         </cac:Party>
     </cac:AccountingSupplierParty>
     <cac:AccountingCustomerParty>
         <cac:Party>
-            <cbc:EndpointID schemeID="0248">${invoice.eas.replace('0248:', '')}</cbc:EndpointID>
+            <cbc:EndpointID schemeID="0248">${customerEndpoint.replace('0248:', '')}</cbc:EndpointID>
             <cac:PartyTaxScheme>
-                <cbc:CompanyID>${invoice.cpv}</cbc:CompanyID>
+                <cbc:CompanyID>${customerVat}</cbc:CompanyID>
                 <cac:TaxScheme><cbc:ID>VAT</cbc:TaxScheme>
             </cac:PartyTaxScheme>
             <cac:PartyLegalEntity>
-                <cbc:RegistrationName>${invoice.cp}</cbc:RegistrationName>
+                <cbc:RegistrationName>${customerName}</cbc:RegistrationName>
             </cac:PartyLegalEntity>
         </cac:Party>
     </cac:AccountingCustomerParty>
@@ -301,13 +307,13 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
               <span className="text-[10px] font-bold text-[#0d4f8b] uppercase block">Seller (Supplier)</span>
               <div className="font-bold text-slate-900">
-                {isAp ? invoice.cp : 'Al Noor Trading LLC'}
+                {invoice.sName || (isAp ? invoice.cp : 'Issuing company')}
               </div>
               <div className="text-slate-600">
-                VAT ID: <b className="font-mono">{isAp ? invoice.cpv : 'OM1100123456'}</b>
+                VAT ID: <b className="font-mono">{invoice.sVat || (isAp ? invoice.cpv : 'Not available')}</b>
               </div>
               <div className="text-slate-500 text-[11px]">
-                E-Address: <span className="font-mono">{isAp ? invoice.eas : '0248:OM1100123456'}</span>
+                E-Address: <span className="font-mono">{isAp ? invoice.eas : (invoice.sVat ? `0248:${invoice.sVat}` : 'Not available')}</span>
               </div>
               <div className="text-slate-500 text-[11px]">Country: OM (Oman)</div>
             </div>
@@ -316,13 +322,13 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
               <span className="text-[10px] font-bold text-[#0d4f8b] uppercase block">Buyer (Customer)</span>
               <div className="font-bold text-slate-900">
-                {isAp ? 'Al Noor Trading LLC' : invoice.cp}
+                {invoice.buyerName || (!isAp ? invoice.cp : 'Receiving company')}
               </div>
               <div className="text-slate-600">
-                VAT ID: <b className="font-mono">{isAp ? 'OM1100123456' : invoice.cpv}</b>
+                VAT ID: <b className="font-mono">{invoice.buyerVat || (!isAp ? invoice.cpv : 'Not available')}</b>
               </div>
               <div className="text-slate-500 text-[11px]">
-                E-Address: <span className="font-mono">{isAp ? '0248:OM1100123456' : invoice.eas}</span>
+                E-Address: <span className="font-mono">{!isAp ? invoice.eas : (invoice.buyerVat ? `0248:${invoice.buyerVat}` : 'Not available')}</span>
               </div>
               <div className="text-slate-500 text-[11px]">Country: OM (Oman)</div>
             </div>
@@ -438,9 +444,11 @@ export const InvoiceDrawer: React.FC<InvoiceDrawerProps> = ({
             <span>Download UBL XML</span>
           </button>
 
-          {isAp && invoice.ap?.startsWith('Awaiting') && (
+          {isAp && (!invoice.ap || /awaiting|pending/i.test(invoice.ap)) && (
             <button
-              onClick={() => onApproveAp(invoice.n)}
+              onClick={() => void onApproveAp(invoice.n).catch((error) => {
+                window.alert(error instanceof Error ? error.message : 'The AP document could not be approved.');
+              })}
               className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer ml-auto shadow-2xs"
             >
               <CheckCircle2 className="h-4 w-4" />

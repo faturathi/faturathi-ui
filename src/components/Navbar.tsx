@@ -20,8 +20,7 @@ import {
   Server,
   Building2,
   Users,
-  Sliders,
-  Phone
+  Sliders
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -67,7 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
     subItems: [
       { id: 'inv', code: 'B.1', label: 'Invoices (AR)', desc: 'Outbound sales invoice register & status', icon: <FileText className="h-4 w-4 text-[#0d4f8b]" /> },
       { id: 'ap_inv', code: 'B.2', label: 'AP Invoices', desc: 'Inbound supplier bill action hub', icon: <Radio className="h-4 w-4 text-emerald-600" /> },
-      { id: 'new', code: 'B.3', label: 'Create Invoice', desc: 'Quick Invoice & PINT-OM 73-Field Engine', icon: <PlusCircle className="h-4 w-4 text-blue-600" /> }
+      { id: 'new', code: 'B.3', label: 'Create Document', desc: 'Invoice, credit/debit note & self-billing', icon: <PlusCircle className="h-4 w-4 text-blue-600" /> }
     ]
   },
   {
@@ -134,15 +133,10 @@ export const NAV_GROUPS: NavGroup[] = [
     ar: 'لماذا فوترتي',
     primaryTab: 'cmp',
     icon: <HelpCircle className="h-4 w-4 text-emerald-600" />
-  },
-  {
-    id: 'grp_about',
-    code: 'I',
-    label: 'About / Contact',
-    ar: 'من نحن / اتصل بنا',
-    primaryTab: 'about',
-    icon: <Phone className="h-4 w-4 text-[#0d4f8b]" />
   }
+  // About/Contact intentionally not a top-level nav group — the bar has no overflow handling
+  // and an 9th item pushed "About" off-screen. It lives in the Header's action row instead
+  // (next to Setup Guide / Reset Seeds), see Header.tsx's onOpenAbout button.
 ];
 
 const HIDDEN_TABS_BY_ROLE: Record<RoleMode, string[]> = {

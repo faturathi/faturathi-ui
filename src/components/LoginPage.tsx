@@ -23,7 +23,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { User, RoleMode } from '../types';
-import { apiFetch, saveSession } from '../lib/api';
+import { apiFetch, formatApiErrors, saveSession } from '../lib/api';
 
 export interface AuthUser extends User {
   roleCategory: 'superadmin' | 'portal_admin' | 'finance_mgr' | 'normal_user';
@@ -36,21 +36,6 @@ export interface AuthUser extends User {
 
 export const DEMO_USER_ROLES: AuthUser[] = [
   {
-    id: 'user-1',
-    n: 'Salim Al-Harthy',
-    e: 'superadmin@faturathi.netbue.om',
-    r: 'Super Admin (Technical)',
-    ent: 'All Vendor Systems & Entities',
-    st: 'Active',
-    ll: 'Today, 09:15',
-    roleCategory: 'superadmin',
-    roleTitle: '1.) Super Admin (Technical)',
-    roleBadge: 'Vendor Technical Staff',
-    description: 'Technical configuration, Peppol C2/C3 access point parameters, REST API endpoints, Schematron rules & database logs.',
-    avatarColor: 'bg-purple-600 text-white',
-    mappedRoleMode: 'admin'
-  },
-  {
     id: 'user-2',
     n: 'Tariq Al-Siyabi',
     e: 'salim.h@intel-sol.om',
@@ -59,7 +44,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
     st: 'Active',
     ll: 'Today, 08:50',
     roleCategory: 'portal_admin',
-    roleTitle: '2.) Admin / Manager for Portal',
+    roleTitle: '1.) Admin / Manager for Portal',
     roleBadge: 'Portal Administrator',
     description: 'Manage organization users, grant/revoke entity permissions, configure role access controls, and manage subscription settings.',
     avatarColor: 'bg-[#0d4f8b] text-white',
@@ -74,7 +59,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
     st: 'Active',
     ll: 'Yesterday, 16:40',
     roleCategory: 'finance_mgr',
-    roleTitle: '3.) Accountant / Finance Manager',
+    roleTitle: '2.) Accountant / Finance Manager',
     roleBadge: 'Finance Approver',
     description: 'Review invoice totals, sign-off AP ERP postings, run VAT reconciliation, and generate SAF-T audit compliance files.',
     avatarColor: 'bg-emerald-600 text-white',
@@ -89,7 +74,7 @@ export const DEMO_USER_ROLES: AuthUser[] = [
     st: 'Active',
     ll: 'Today, 08:30',
     roleCategory: 'normal_user',
-    roleTitle: '4.) Normal App User',
+    roleTitle: '3.) Normal App User',
     roleBadge: 'Invoice Operations',
     description: 'Create & monitor invoices, upload batch JSON/XML files, review validation errors, correct line items, and submit to OTA.',
     avatarColor: 'bg-amber-600 text-white',
@@ -117,6 +102,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [otpCode, setOtpCode] = useState<string>('');
   const [otpError, setOtpError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [authMethod, setAuthMethod] = useState<'password' | 'email_otp'>('password');
 
   const handleRoleSelect = (usr: AuthUser) => {
     setSelectedRole(usr);
@@ -136,7 +122,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   };
 
   const completeLogin = (result: any) => {
-    saveSession({ token: result.token, refresh: result.refresh });
+    saveSession({ token: result.token, refresh: result.refresh }, rememberMe);
     onLoginSuccess(toAuthUser(result.user));
   };
 
@@ -145,8 +131,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setIsLoggingIn(true);
     setLoginError(null);
     try {
-      const result = await apiFetch<any>('/api/auth/login', {
-        method: 'POST', body: JSON.stringify({ email, password })
+      const result = await apiFetch<any>(authMethod === 'password' ? '/api/auth/login' : '/api/auth/email-otp', {
+        method: 'POST', body: JSON.stringify(authMethod === 'password' ? { email, password } : { email })
       });
       if (result.mfa_required) {
         setAuthStep('mfa_otp');
@@ -156,7 +142,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         completeLogin(result);
       }
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : 'Login failed.');
+      setLoginError(formatApiErrors(error, 'Sign-in failed. Check the email and password and try again.').join(' '));
     } finally {
       setIsLoggingIn(false);
     }
@@ -172,7 +158,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
       });
       completeLogin(result);
     } catch (error) {
-      setOtpError(error instanceof Error ? error.message : 'MFA verification failed.');
+      setOtpError(formatApiErrors(error, 'OTP verification failed.').join(' '));
     } finally {
       setIsLoggingIn(false);
     }
@@ -316,14 +302,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     </span>
                   </h2>
                   <p className="text-xs text-slate-500 mt-1">
-                    Select a predefined user role below or enter your portal credentials.
+                    Sign in with your password, then verify the demo email OTP.
                   </p>
                 </div>
 
-                {/* 4 User Roles Interactive Preset Selector */}
+                {/* Three tenant-facing role presets. Technical super-admin login is intentionally not advertised. */}
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                    Select User Role Persona (4 Core Roles):
+                    Select User Role Persona (3 Core Roles):
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {DEMO_USER_ROLES.map((roleItem) => {
@@ -384,8 +370,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     </div>
                   </div>
 
-                  {/* Password Field */}
-                  <div>
+                  <div className="grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-xs font-bold">
+                    <button type="button" onClick={() => setAuthMethod('password')} className={`rounded-lg px-3 py-2 ${authMethod === 'password' ? 'bg-white text-[#0d4f8b] shadow-sm' : 'text-slate-500'}`}>Password + OTP</button>
+                    <button type="button" onClick={() => setAuthMethod('email_otp')} className={`rounded-lg px-3 py-2 ${authMethod === 'email_otp' ? 'bg-white text-[#0d4f8b] shadow-sm' : 'text-slate-500'}`}>Email OTP only</button>
+                  </div>
+                  {authMethod === 'password' && <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold text-slate-700">
                         Password
@@ -419,7 +408,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                         {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
-                  </div>
+                  </div>}
 
                   {/* Remember Me Checkbox */}
                   <div className="flex items-center justify-between">
@@ -449,11 +438,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     {isLoggingIn ? (
                       <>
                         <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>Authenticating Credentials...</span>
+                        <span>{authMethod === 'password' ? 'Checking credentials…' : 'Sending email OTP…'}</span>
                       </>
                     ) : (
                       <>
-                        <span>Continue to 2FA Authentication</span>
+                        <span>{authMethod === 'password' ? 'Login & Continue to OTP' : 'Send Email OTP'}</span>
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}

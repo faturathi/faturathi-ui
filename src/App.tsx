@@ -17,15 +17,17 @@ import { SecurityView } from './components/SecurityView';
 import { AdministrationView } from './components/AdministrationView';
 import { WhyFaturathiView } from './components/WhyFaturathiView';
 import { AboutView } from './components/AboutView';
+import { FloatingChatWidget } from './components/FloatingChatWidget';
 import { InvoiceDrawer } from './components/InvoiceDrawer';
 import { EditInvoiceModal } from './components/EditInvoiceModal';
 import { LoginPage, AuthUser } from './components/LoginPage';
 import { CertificateWarningModal } from './components/CertificateWarningModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { PreLandingCertChecker } from './components/PreLandingCertChecker';
 import EndpointDocs from './components/EndpointDocs';
 import { Invoice, User, RoleMode, canEditInvoice, Entity, CompanyGroup } from './types';
 import { AnimatePresence, motion } from 'motion/react';
-import { ApiError, apiFetch, apiUrl, clearSession, setActiveBusinessGroup, setActiveCompany, unwrapList } from './lib/api';
+import { ApiError, apiFetch, apiUrl, clearSession, formatApiErrors, hasSession, setActiveBusinessGroup, setActiveCompany, unwrapList } from './lib/api';
 
 const INITIAL_INVOICES: Invoice[] = [
   {
@@ -227,7 +229,9 @@ const INITIAL_USERS: User[] = [
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('dash');
+  const [authInitializing, setAuthInitializing] = useState(true);
+  const [sessionError, setSessionError] = useState('');
+  const [activeTab, setActiveTab] = useState<string>(() => localStorage.getItem('faturathi.activeTab') || 'dash');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [selectedEntity, setSelectedEntity] = useState<string>('group');
@@ -244,7 +248,7 @@ export default function App() {
   const [isResetting, setIsResetting] = useState<boolean>(false);
 
   // Certificate & Pre-Landing Security State
-  const [isCertVerifiedPreLanding, setIsCertVerifiedPreLanding] = useState<boolean>(false);
+  const [isCertVerifiedPreLanding, setIsCertVerifiedPreLanding] = useState<boolean>(() => localStorage.getItem('faturathi.certProceed') === 'true');
   const [isCertModalOpen, setIsCertModalOpen] = useState<boolean>(false);
   const [certVerified, setCertVerified] = useState<boolean>(true);
 
@@ -254,6 +258,46 @@ export default function App() {
     setActiveTab('dash');
   };
 
+  useEffect(() => {
+    let active = true;
+    const restoreSession = async () => {
+      if (!hasSession()) {
+        if (active) setAuthInitializing(false);
+        return;
+      }
+      try {
+        const user = await apiFetch<any>('/api/auth/me');
+        const roleMap: Record<string, RoleMode> = {
+          SUPERADMIN: 'admin', ADMIN: 'admin', APPROVER: 'finmgr', MAKER: 'maker', VIEWER: 'audit'
+        };
+        const restored: AuthUser = {
+          id: user.id, n: user.name || user.email, e: user.email, r: user.role,
+          ent: user.entityId || 'ALL', st: 'Active', ll: 'Current session',
+          roleCategory: user.role === 'APPROVER' ? 'finance_mgr' : user.role === 'MAKER' ? 'normal_user' : 'portal_admin',
+          roleTitle: user.role === 'APPROVER' ? 'Accountant / Finance Manager' : user.role === 'MAKER' ? 'Normal App User' : 'Admin / Manager for Portal',
+          roleBadge: user.role === 'APPROVER' ? 'Finance Approver' : user.role === 'MAKER' ? 'Invoice Operations' : 'Portal Administrator',
+          description: 'Authenticated Faturathi portal user.', avatarColor: 'bg-[#0d4f8b] text-white',
+          mappedRoleMode: roleMap[user.role] || 'ops',
+        };
+        if (active) {
+          setCurrentUser(restored);
+          setRoleMode(restored.mappedRoleMode);
+        }
+      } catch (error) {
+        clearSession();
+        if (active) setSessionError(formatApiErrors(error, 'Your session expired. Please sign in again.').join(' '));
+      } finally {
+        if (active) setAuthInitializing(false);
+      }
+    };
+    void restoreSession();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('faturathi.activeTab', activeTab);
+  }, [activeTab]);
+
   const handleLogout = () => {
     clearSession();
     setCurrentUser(null);
@@ -262,6 +306,8 @@ export default function App() {
     setEntities([]);
     setCompanyGroups([]);
     setTenantContextLoaded(false);
+    localStorage.removeItem('faturathi.activeTab');
+    setActiveTab('dash');
   };
 
   const apiEndpoint = apiUrl('/api/invoices');
@@ -341,7 +387,7 @@ export default function App() {
   const handleCreateInvoiceSubmit = async (newInv: any, validateAndSubmit = false) => {
     const invWithId: Invoice = {
       ...newInv,
-      ent: selectedEntity === 'group' ? '' : selectedEntity,
+      ent: newInv.ent || (selectedEntity === 'group' ? '' : selectedEntity),
       branch: '100 — HQ Muscat',
       uuid: null
     };
@@ -355,6 +401,11 @@ export default function App() {
         `/api/invoices/${encodeURIComponent(created.id || created.n)}/validate`, { method: 'POST' }
       );
       if (!validation.valid) {
+        // The draft already exists. Move the user to that persisted document instead of leaving
+        // the creator open, where retrying would produce a duplicate invoice-number error.
+        await fetchInvoices();
+        setSelectedInvoice(created);
+        setActiveTab('inv');
         const error = new Error(validation.errors.map((item) => `${item.field}: ${item.message}`).join('\n'));
         (error as any).fieldErrors = validation.errors;
         throw error;
@@ -372,13 +423,15 @@ export default function App() {
     setActiveTab('inv');
   };
 
-  const handleApproveAp = async (invNum: string) => {
+  const handleApproveAp = async (invNum: string): Promise<Invoice> => {
     try {
       const invoice = invoices.find((item) => item.n === invNum);
-      await apiFetch(`/api/invoices/${encodeURIComponent(invoice?.id || invNum)}/approve`, { method: 'POST' });
+      const approved = await apiFetch<Invoice>(`/api/invoices/${encodeURIComponent(invoice?.id || invNum)}/approve`, { method: 'POST' });
       await fetchInvoices();
+      setSelectedInvoice((current) => current?.n === invNum ? approved : current);
+      return approved;
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Approval failed.');
+      throw new Error(formatApiErrors(error, 'The AP document could not be approved.').join(' '));
     }
   };
 
@@ -470,12 +523,16 @@ export default function App() {
     fetchInvoices();
   };
 
+  if (authInitializing) {
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm text-sm font-semibold text-slate-700">Restoring your secure session…</div></div>;
+  }
+
   if (!isCertVerifiedPreLanding) {
-    return <PreLandingCertChecker onProceed={() => setIsCertVerifiedPreLanding(true)} />;
+    return <PreLandingCertChecker onProceed={() => { localStorage.setItem('faturathi.certProceed', 'true'); setIsCertVerifiedPreLanding(true); }} />;
   }
 
   if (!currentUser) {
-    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+    return <><LoginPage onLoginSuccess={handleLoginSuccess} />{sessionError && <div role="alert" className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900 shadow-lg">{sessionError}</div>}</>;
   }
 
   return (
@@ -496,6 +553,7 @@ export default function App() {
         companyGroups={companyGroups}
         selectedGroup={selectedGroup}
         onSelectGroup={handleSelectGroup}
+        onOpenAbout={() => setActiveTab('about')}
       />
 
       {/* Navbar Navigation */}
@@ -513,6 +571,7 @@ export default function App() {
 
       {/* Main Content Area - Responsive Full Width */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <ErrorBoundary key={activeTab} compact>
         {/* Collapsible Setup Docs */}
         <AnimatePresence>
           {showDocs && (
@@ -566,7 +625,7 @@ export default function App() {
 
         {/* Tab 4: Create Invoice (Quick Invoice & PINT-OM 73-Field Engine) */}
         {activeTab === 'new' && (
-          <CreateInvoiceView onSubmitInvoice={handleCreateInvoiceSubmit} />
+          <CreateInvoiceView onSubmitInvoice={handleCreateInvoiceSubmit} entities={entities} selectedEntity={selectedEntity} />
         )}
 
         {/* Tab 5: Upload & Batch */}
@@ -585,6 +644,7 @@ export default function App() {
             invoices={invoices}
             onTriggerTddSubmit={handleTriggerTddSubmit}
             onSaveAndResendInvoice={handleSaveAndResendInvoice}
+            entities={entities}
           />
         )}
 
@@ -622,6 +682,7 @@ export default function App() {
 
         {/* Tab 14: About Us / Contact Us */}
         {activeTab === 'about' && <AboutView />}
+        </ErrorBoundary>
       </main>
 
       {/* Slide-In Invoice Detail Drawer */}
@@ -641,10 +702,14 @@ export default function App() {
         isOpen={isEditModalOpen}
         onClose={() => setIsEditModalOpen(false)}
         onSaveAndResend={handleSaveAndResendInvoice}
+        entities={entities}
       />
 
       {/* Corporate Footer */}
       <Footer onNavigateAbout={() => setActiveTab('about')} />
+
+      {/* Global floating support chat — persists across tab navigation */}
+      <FloatingChatWidget />
 
       {/* Certificate Warning Landing Modal */}
       <CertificateWarningModal

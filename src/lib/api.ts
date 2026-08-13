@@ -28,18 +28,32 @@ export class ApiError extends Error {
   }
 }
 
-export function saveSession(session: AuthSession) {
-  sessionStorage.setItem(ACCESS_TOKEN_KEY, session.token);
-  sessionStorage.setItem(REFRESH_TOKEN_KEY, session.refresh);
+function authStorage(): Storage | null {
+  if (localStorage.getItem(REFRESH_TOKEN_KEY)) return localStorage;
+  if (sessionStorage.getItem(REFRESH_TOKEN_KEY)) return sessionStorage;
+  return null;
+}
+
+export function saveSession(session: AuthSession, persistent = false) {
+  clearSession();
+  const storage = persistent ? localStorage : sessionStorage;
+  storage.setItem(ACCESS_TOKEN_KEY, session.token);
+  storage.setItem(REFRESH_TOKEN_KEY, session.refresh);
 }
 
 export function clearSession() {
   sessionStorage.removeItem(ACCESS_TOKEN_KEY);
   sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export function hasSession() {
-  return Boolean(sessionStorage.getItem(ACCESS_TOKEN_KEY));
+  return Boolean(authStorage()?.getItem(REFRESH_TOKEN_KEY));
+}
+
+export function getRefreshToken() {
+  return authStorage()?.getItem(REFRESH_TOKEN_KEY) || '';
 }
 
 export function setActiveCompany(companyIdOrCode: string) {
@@ -57,18 +71,44 @@ export function unwrapList<T>(payload: T[] | { results?: T[] }): T[] {
 
 export type ApiFieldErrors = Record<string, string[]>;
 
+function flattenMessages(value: unknown, prefix = ''): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => flattenMessages(item, prefix));
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
+      flattenMessages(item, prefix ? `${prefix}.${key}` : key));
+  }
+  return [`${prefix ? `${prefix}: ` : ''}${String(value)}`];
+}
+
 export function getApiFieldErrors(error: unknown): ApiFieldErrors {
   if (!(error instanceof ApiError) || !error.payload || typeof error.payload !== 'object') return {};
+  const payload = error.payload as Record<string, unknown>;
+  const envelope = payload.error && typeof payload.error === 'object'
+    ? payload.error as Record<string, unknown>
+    : null;
+  const source = envelope?.fields && typeof envelope.fields === 'object'
+    ? envelope.fields as Record<string, unknown>
+    : payload;
   const result: ApiFieldErrors = {};
-  for (const [field, messages] of Object.entries(error.payload as Record<string, unknown>)) {
-    result[field] = Array.isArray(messages) ? messages.map(String) : [String(messages)];
+  for (const [field, messages] of Object.entries(source)) {
+    if (['error', 'detail', 'message', 'code'].includes(field)) continue;
+    result[field] = flattenMessages(messages);
   }
   return result;
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export function formatApiErrors(error: unknown, fallback = 'The request could not be completed.'): string[] {
+  const fields = getApiFieldErrors(error);
+  const messages = Object.entries(fields).flatMap(([field, values]) =>
+    values.map((value) => `${field.replaceAll('_', ' ')}: ${value}`));
+  if (messages.length) return messages;
+  return [error instanceof Error && error.message ? error.message : fallback];
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}, retryAuth = true): Promise<T> {
   const headers = new Headers(init.headers);
-  const token = sessionStorage.getItem(ACCESS_TOKEN_KEY);
+  const storage = authStorage();
+  const token = storage?.getItem(ACCESS_TOKEN_KEY);
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (activeCompany) headers.set('X-Company-ID', activeCompany);
   if (activeBusinessGroup) headers.set('X-Business-Group-ID', activeBusinessGroup);
@@ -82,6 +122,22 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     ? await response.json()
     : await response.text();
   if (!response.ok) {
+    const isAuthRequest = /\/auth\/(login|email-otp|mfa-verify|refresh)/.test(path);
+    if (response.status === 401 && retryAuth && !isAuthRequest) {
+      const refresh = getRefreshToken();
+      if (refresh && storage) {
+        const refreshResponse = await fetch(apiUrl('/api/auth/refresh'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh }),
+        });
+        if (refreshResponse.ok) {
+          const refreshed = await refreshResponse.json();
+          storage.setItem(ACCESS_TOKEN_KEY, refreshed.access);
+          return apiFetch<T>(path, init, false);
+        }
+      }
+      clearSession();
+    }
     const body = typeof payload === 'object' && payload ? payload as Record<string, unknown> : {};
     // Backend's global exception handler wraps errors as {"error": {"code","message","fields"}};
     // older/DRF-default responses may still use a bare "detail" string. Prefer the structured
