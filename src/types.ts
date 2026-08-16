@@ -49,6 +49,9 @@ export interface Invoice {
   warn?: string; // Warning detail if AB
   ap?: string; // AP status e.g. 'Awaiting approval', 'Approved · posted to ERP'
   branch?: string;
+  branchId?: string | null;
+  branchCode?: string | null;
+  branchName?: string | null;
   currency?: string;
   sVat?: string; // Seller VAT ID
   sName?: string;
@@ -97,6 +100,25 @@ export interface CompanyGroup {
   id: string;
   name: string;
   group_vatin: string;
+}
+
+export interface CompanyBranch {
+  id: string;
+  company: string;
+  company_name: string;
+  company_vatin: string;
+  code: string;
+  name: string;
+  address?: string;
+  city?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  invoice_prefix: string;
+  invoice_suffix: string;
+  credit_note_prefix: string;
+  credit_note_suffix: string;
+  next_invoice_number: number;
+  is_active: boolean;
 }
 
 export interface User {

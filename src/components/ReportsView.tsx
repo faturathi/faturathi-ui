@@ -20,6 +20,23 @@ interface ReportRow {
   status: 'Cleared' | 'Pending OTA' | 'Rejected' | 'Archived';
   errorCode?: string;
   hash: string;
+  branchId: string | null;
+  branchCode: string;
+  branchName: string;
+  companyName: string;
+  companyVatin: string;
+}
+
+interface BranchSummary {
+  branch_id: string | null;
+  branch_code: string;
+  branch_name: string;
+  company_name: string;
+  company_vatin: string;
+  document_count: number;
+  net: number;
+  vat: number;
+  total: number;
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) => {
@@ -29,6 +46,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [branchFilter, setBranchFilter] = useState<string>('ALL');
   const [sortField, setSortField] = useState<'date' | 'num' | 'totalAmt' | 'status'>('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -93,6 +111,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4'>('ALL');
 
   const [reportData, setReportData] = useState<ReportRow[]>([]);
+  const [branchSummary, setBranchSummary] = useState<BranchSummary[]>([]);
 
   // System logs dataset
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
@@ -103,12 +122,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
     void Promise.allSettled([
       apiFetch<any[]>('/api/reports/tax-grid'),
       apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100'),
-    ]).then(([reportResult, logResult]) => {
+      apiFetch<BranchSummary[]>('/api/reports/branch-summary'),
+    ]).then(([reportResult, logResult, branchResult]) => {
       const errors: string[] = [];
       const rows = reportResult.status === 'fulfilled' ? reportResult.value : [];
       const logPayload = logResult.status === 'fulfilled' ? logResult.value : [];
       if (reportResult.status === 'rejected') errors.push(...formatApiErrors(reportResult.reason, 'Tax reports could not be loaded.'));
       if (logResult.status === 'rejected') errors.push(...formatApiErrors(logResult.reason, 'Audit logs could not be loaded.'));
+      if (branchResult.status === 'rejected') errors.push(...formatApiErrors(branchResult.reason, 'Branch totals could not be loaded.'));
       setReportData((Array.isArray(rows) ? rows : []).map((row) => ({
         id: row.id || row.invoice_number,
         num: String(row.invoice_number || ''),
@@ -126,7 +147,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
         status: row.status === 'Reported' ? 'Cleared' : row.status === 'Rejected' ? 'Rejected' : 'Pending OTA',
         errorCode: row.error,
         hash: row.uuid || '',
+        branchId: row.branch_id || null,
+        branchCode: String(row.branch_code || 'UNASSIGNED'),
+        branchName: String(row.branch_name || 'Company default / unassigned'),
+        companyName: String(row.company_name || ''),
+        companyVatin: String(row.company_vatin || ''),
       })));
+      setBranchSummary(branchResult.status === 'fulfilled' && Array.isArray(branchResult.value)
+        ? branchResult.value : []);
       setSystemLogs(unwrapList(logPayload).map((log) => ({
         time: log.created_at,
         level: String(log.detail?.level || '').toUpperCase() === 'WARNING' ? 'WARN'
@@ -144,10 +172,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
     const matchesSearch =
       row.num.toLowerCase().includes(searchTerm.toLowerCase()) ||
       row.counterparty.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      row.vatin.toLowerCase().includes(searchTerm.toLowerCase());
+      row.vatin.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      row.branchCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      row.branchName.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesType = typeFilter === 'ALL' || row.docType === typeFilter;
     const matchesStatus = statusFilter === 'ALL' || row.status === statusFilter;
+    const matchesBranch = branchFilter === 'ALL' ||
+      (branchFilter === 'UNASSIGNED' ? !row.branchId : row.branchId === branchFilter);
 
     // Date & Time Range Filter
     let matchesDate = true;
@@ -164,7 +196,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
       if (rowDateTime > toStamp) matchesDate = false;
     }
 
-    return matchesSearch && matchesType && matchesStatus && matchesDate;
+    return matchesSearch && matchesType && matchesStatus && matchesBranch && matchesDate;
   }).sort((a, b) => {
     let aVal: any = a[sortField];
     let bVal: any = b[sortField];
@@ -192,9 +224,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
 
   // Export options
   const handleExportCSV = () => {
-    let csv = 'Invoice Number,Date,Document Type,Counterparty,VATIN,Net Amount (OMR),VAT Amount (OMR),Total Amount (OMR),Status,Hash\n';
+    let csv = 'Invoice Number,Date,Document Type,Legal Company,Company VATIN,Branch Code,Branch Name,Counterparty,Counterparty VATIN,Net Amount (OMR),VAT Amount (OMR),Total Amount (OMR),Status,Hash\n';
     filteredData.forEach(r => {
-      csv += `"${r.num}","${r.date}","${r.docType}","${r.counterparty}","${r.vatin}",${r.netAmt.toFixed(3)},${r.vatAmt.toFixed(3)},${r.totalAmt.toFixed(3)},"${r.status}","${r.hash}"\n`;
+      csv += `"${r.num}","${r.date}","${r.docType}","${r.companyName}","${r.companyVatin}","${r.branchCode}","${r.branchName}","${r.counterparty}","${r.vatin}",${r.netAmt.toFixed(3)},${r.vatAmt.toFixed(3)},${r.totalAmt.toFixed(3)},"${r.status}","${r.hash}"\n`;
     });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -331,6 +363,33 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
             {reportData.filter(r => r.status === 'Rejected').length}
           </div>
           <span className="text-[10px] text-red-700 font-medium">Requires Resolution</span>
+        </div>
+      </div>
+
+      {/* Branch-wise operational reporting — same company/VATIN, different outlet codes */}
+      <div className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-2xs space-y-3">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900">Branch-wise Sales &amp; Tax Summary</h3>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Operational outlet analysis within each legal company. Branches below share the displayed company VATIN; they are not subsidiaries or separate VAT registrations.
+          </p>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-emerald-50 text-[10px] uppercase text-emerald-900"><tr><th className="p-3">Branch / Outlet</th><th className="p-3">Legal Company &amp; VATIN</th><th className="p-3 text-right">Documents</th><th className="p-3 text-right">Net (OMR)</th><th className="p-3 text-right">VAT (OMR)</th><th className="p-3 text-right">Total (OMR)</th></tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {branchSummary.length === 0 ? <tr><td colSpan={6} className="p-6 text-center text-slate-400">No branch-level data is configured for the active company scope.</td></tr> : branchSummary.map((branch) => (
+                <tr key={branch.branch_id || 'UNASSIGNED'} className="hover:bg-slate-50">
+                  <td className="p-3"><b className="font-mono text-[#0d4f8b]">{branch.branch_code}</b><span className="block font-bold text-slate-800">{branch.branch_name}</span></td>
+                  <td className="p-3"><b className="block text-slate-800">{branch.company_name}</b><span className="font-mono text-[10px] text-emerald-700">{branch.company_vatin}</span></td>
+                  <td className="p-3 text-right font-bold">{branch.document_count}</td>
+                  <td className="p-3 text-right font-mono">{Number(branch.net).toFixed(3)}</td>
+                  <td className="p-3 text-right font-mono">{Number(branch.vat).toFixed(3)}</td>
+                  <td className="p-3 text-right font-mono font-bold text-slate-900">{Number(branch.total).toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -524,17 +583,34 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
         </div>
 
         {/* Filters & Search Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 text-xs">
           {/* Search Input */}
           <div className="relative sm:col-span-2">
             <Search className="h-4 w-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
-              placeholder="Search by Invoice No, Counterparty, or VATIN..."
+              placeholder="Search invoice, party, VATIN, branch code or name..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 outline-none text-slate-800 font-semibold focus:border-[#0d4f8b]"
             />
+          </div>
+
+          {/* Operational Branch Filter */}
+          <div>
+            <select
+              value={branchFilter}
+              onChange={(e) => { setBranchFilter(e.target.value); setCurrentPage(1); }}
+              aria-label="Filter by operational branch"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none text-slate-800 font-bold"
+            >
+              <option value="ALL">All Operational Branches</option>
+              {branchSummary.map((branch) => (
+                <option key={branch.branch_id || 'UNASSIGNED'} value={branch.branch_id || 'UNASSIGNED'}>
+                  {branch.branch_code} — {branch.branch_name}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Type Filter */}
@@ -587,6 +663,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
                   </div>
                 </th>
                 <th className="py-2.5 px-3">Type</th>
+                <th className="py-2.5 px-3">Branch / Outlet</th>
                 <th className="py-2.5 px-3">Counterparty &amp; VATIN</th>
                 <th className="py-2.5 px-3 text-right">Net Amount</th>
                 <th className="py-2.5 px-3 text-right">VAT (5%)</th>
@@ -607,7 +684,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {paginatedData.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400 font-medium">
+                  <td colSpan={9} className="py-8 text-center text-slate-400 font-medium">
                     No matching tax report records found.
                   </td>
                 </tr>
@@ -624,6 +701,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
                     </td>
                     <td className="py-3 px-3">
                       <span className="font-semibold text-slate-800">{row.docType}</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <b className="block font-mono text-[#0d4f8b]">{row.branchCode}</b>
+                      <span className="text-[10px] text-slate-500">{row.branchName}</span>
                     </td>
                     <td className="py-3 px-3">
                       <b className="font-bold text-slate-900 block">{row.counterparty}</b>

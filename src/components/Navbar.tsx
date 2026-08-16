@@ -172,7 +172,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onTabChange, roleMode
   };
 
   return (
-    <nav ref={navRef} className="bg-white border-b border-slate-300 sticky top-0 sm:top-[58px] z-50 shadow-xs">
+    <nav ref={navRef} className="border-b border-slate-300 bg-white shadow-xs">
       <div className="max-w-[1600px] w-full mx-auto px-2 sm:px-6">
         <ul className="flex items-center flex-wrap sm:flex-nowrap gap-0 py-0 overflow-visible relative">
           {NAV_GROUPS.map((group) => {

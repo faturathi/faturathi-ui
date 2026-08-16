@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { User, RoleMode } from '../types';
+import { CompanyBranch, User, RoleMode } from '../types';
 import { 
   Shield, UserPlus, Users, Settings, Lock, AlertTriangle, CheckCircle2, 
   Building2, Server, Sliders, ShieldCheck, Search, Filter, Download, 
@@ -63,6 +63,19 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [selectedCompanyGroup, setSelectedCompanyGroup] = useState('');
 
   const [entities, setEntities] = useState<any[]>([]);
+  const [branches, setBranches] = useState<CompanyBranch[]>([]);
+  const [branchCompanyId, setBranchCompanyId] = useState('');
+  const [editingBranchId, setEditingBranchId] = useState<string | null>(null);
+  const [branchCode, setBranchCode] = useState('');
+  const [branchName, setBranchName] = useState('');
+  const [branchCity, setBranchCity] = useState('Muscat');
+  const [branchAddress, setBranchAddress] = useState('');
+  const [branchInvoicePrefix, setBranchInvoicePrefix] = useState('INV-');
+  const [branchInvoiceSuffix, setBranchInvoiceSuffix] = useState('/OM');
+  const [branchCreditPrefix, setBranchCreditPrefix] = useState('CN-');
+  const [branchCreditSuffix, setBranchCreditSuffix] = useState('/CN');
+  const [branchError, setBranchError] = useState('');
+  const [isSavingBranch, setIsSavingBranch] = useState(false);
   // Form State for Adding/Updating Sub-Company
   const [subName, setSubName] = useState('');
   const [subNameAr, setSubNameAr] = useState('');
@@ -96,10 +109,98 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   };
 
   const loadEntities = async () => {
-    const entityPayload = await apiFetch<any[] | { results?: any[] }>('/api/entities?page_size=100');
-    const groupPayload = await apiFetch<any[] | { results?: any[] }>('/api/company-groups?page_size=100');
-    setEntities(unwrapList(entityPayload));
+    const [entityPayload, groupPayload, branchPayload] = await Promise.all([
+      apiFetch<any[] | { results?: any[] }>('/api/entities?page_size=100'),
+      apiFetch<any[] | { results?: any[] }>('/api/company-groups?page_size=100'),
+      apiFetch<CompanyBranch[] | { results?: CompanyBranch[] }>('/api/branches?page_size=100'),
+    ]);
+    const loadedEntities = unwrapList(entityPayload);
+    setEntities(loadedEntities);
     setCompanyGroups(unwrapList(groupPayload));
+    setBranches(unwrapList(branchPayload));
+    setBranchCompanyId((current) => loadedEntities.some((entity) => entity.id === current)
+      ? current : loadedEntities.find((entity) => !entity.company_group)?.id || loadedEntities[0]?.id || '');
+  };
+
+  const resetBranchForm = () => {
+    setEditingBranchId(null);
+    setBranchCode('');
+    setBranchName('');
+    setBranchCity('Muscat');
+    setBranchAddress('');
+    setBranchInvoicePrefix('INV-');
+    setBranchInvoiceSuffix('/OM');
+    setBranchCreditPrefix('CN-');
+    setBranchCreditSuffix('/CN');
+    setBranchError('');
+  };
+
+  const handleSaveBranch = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const selectedCompany = entities.find((entity) => entity.id === branchCompanyId);
+    if (!selectedCompany) {
+      setBranchError('Select the legal company that owns this operational branch.');
+      return;
+    }
+    if (!editingBranchId && !await confirmAction({
+      title: 'Create operational branch?',
+      description: `${branchCode.toUpperCase()} — ${branchName}`,
+      detail: `This branch will use ${selectedCompany.name}'s existing VATIN ${selectedCompany.vatin}. It will not create another legal entity or tenant.`,
+      confirmLabel: 'Create branch', kind: 'create',
+    })) return;
+    setIsSavingBranch(true);
+    setBranchError('');
+    try {
+      await apiFetch(editingBranchId ? `/api/branches/${editingBranchId}` : '/api/branches', {
+        method: editingBranchId ? 'PATCH' : 'POST',
+        body: JSON.stringify({
+          company: branchCompanyId, code: branchCode.toUpperCase(), name: branchName,
+          city: branchCity, address: branchAddress, invoice_prefix: branchInvoicePrefix,
+          invoice_suffix: branchInvoiceSuffix, credit_note_prefix: branchCreditPrefix,
+          credit_note_suffix: branchCreditSuffix,
+        }),
+      });
+      await loadEntities();
+      resetBranchForm();
+    } catch (error) {
+      const fields = getApiFieldErrors(error);
+      setBranchError(Object.entries(fields).flatMap(([field, messages]) =>
+        messages.map((message) => `${field}: ${message}`)).join(' ') ||
+        (error instanceof Error ? error.message : 'Branch could not be saved.'));
+    } finally {
+      setIsSavingBranch(false);
+    }
+  };
+
+  const handleEditBranch = (branch: CompanyBranch) => {
+    setEditingBranchId(branch.id);
+    setBranchCompanyId(branch.company);
+    setBranchCode(branch.code);
+    setBranchName(branch.name);
+    setBranchCity(branch.city || 'Muscat');
+    setBranchAddress(branch.address || '');
+    setBranchInvoicePrefix(branch.invoice_prefix);
+    setBranchInvoiceSuffix(branch.invoice_suffix);
+    setBranchCreditPrefix(branch.credit_note_prefix);
+    setBranchCreditSuffix(branch.credit_note_suffix);
+    setBranchError('');
+  };
+
+  const handleDeleteBranch = async (branch: CompanyBranch) => {
+    if (!await confirmAction({
+      title: 'Delete unused branch?', description: `${branch.code} — ${branch.name}`,
+      detail: 'A branch with assigned documents cannot be deleted because historical branch-wise reports must remain intact.',
+      confirmLabel: 'Delete branch', kind: 'danger',
+    })) return;
+    try {
+      await apiFetch(`/api/branches/${branch.id}`, { method: 'DELETE' });
+      await loadEntities();
+      if (editingBranchId === branch.id) resetBranchForm();
+    } catch (error) {
+      const fields = getApiFieldErrors(error);
+      setBranchError(Object.values(fields).flat().join(' ') ||
+        (error instanceof Error ? error.message : 'Branch could not be deleted.'));
+    }
   };
 
   const resetGroupForm = () => {
@@ -1079,6 +1180,73 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                           Edit Entity
                         </button>
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Operational Branch Directory — multiple outlets under one legal VATIN */}
+          <div className="bg-white border border-emerald-200 rounded-2xl p-5 shadow-2xs space-y-4">
+            <div className="flex flex-col gap-1">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-emerald-700" />
+                Operational Branches / Outlets (Same Legal Entity &amp; VATIN)
+              </h3>
+              <p className="text-xs text-slate-500">
+                Use this for a standalone business such as one coffee-shop company with several locations. A branch is a reporting and numbering dimension only — it is not a subsidiary, VAT group member, tenant, or Peppol participant.
+              </p>
+            </div>
+
+            {branchError ? <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-bold text-red-800">{branchError}</div> : null}
+
+            <form onSubmit={handleSaveBranch} className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div>
+                  <label className="block mb-1 font-bold text-emerald-950">Legal Company / VAT Registration *</label>
+                  <select value={branchCompanyId} onChange={(event) => setBranchCompanyId(event.target.value)} required disabled={Boolean(editingBranchId)}
+                    className="w-full rounded-xl border border-emerald-200 bg-white p-2.5 font-bold text-slate-800 disabled:bg-slate-100">
+                    <option value="">Select company</option>
+                    {entities.map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {entity.name} · {entity.vatin}{entity.company_group ? ' (group company)' : ' (standalone)'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div><label className="block mb-1 font-bold text-emerald-950">Branch Code *</label><input required value={branchCode} onChange={(event) => setBranchCode(event.target.value.toUpperCase())} placeholder="MCT-01" className="w-full rounded-xl border border-emerald-200 bg-white p-2.5 font-mono font-bold" /></div>
+                <div><label className="block mb-1 font-bold text-emerald-950">Branch Name *</label><input required value={branchName} onChange={(event) => setBranchName(event.target.value)} placeholder="Muscat Main Coffee Shop" className="w-full rounded-xl border border-emerald-200 bg-white p-2.5 font-bold" /></div>
+                <div><label className="block mb-1 font-bold text-slate-700">City</label><input value={branchCity} onChange={(event) => setBranchCity(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></div>
+                <div className="md:col-span-2"><label className="block mb-1 font-bold text-slate-700">Branch Address</label><input value={branchAddress} onChange={(event) => setBranchAddress(event.target.value)} placeholder="Mall / street / outlet address" className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 rounded-xl border border-blue-200 bg-white p-3 text-xs">
+                <div><label className="block mb-1 font-bold text-blue-900">Invoice Prefix *</label><input required value={branchInvoicePrefix} onChange={(event) => setBranchInvoicePrefix(event.target.value)} placeholder="MCT-INV-" className="w-full rounded-lg border border-blue-200 p-2 font-mono font-bold" /></div>
+                <div><label className="block mb-1 font-bold text-blue-900">Invoice Suffix</label><input value={branchInvoiceSuffix} onChange={(event) => setBranchInvoiceSuffix(event.target.value)} placeholder="/OM" className="w-full rounded-lg border border-blue-200 p-2 font-mono font-bold" /></div>
+                <div><label className="block mb-1 font-bold text-purple-900">Credit Note Prefix *</label><input required value={branchCreditPrefix} onChange={(event) => setBranchCreditPrefix(event.target.value)} placeholder="MCT-CN-" className="w-full rounded-lg border border-purple-200 p-2 font-mono font-bold" /></div>
+                <div><label className="block mb-1 font-bold text-purple-900">Credit Note Suffix</label><input value={branchCreditSuffix} onChange={(event) => setBranchCreditSuffix(event.target.value)} placeholder="/CN" className="w-full rounded-lg border border-purple-200 p-2 font-mono font-bold" /></div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                {editingBranchId ? <button type="button" onClick={resetBranchForm} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-bold">Cancel</button> : null}
+                <button type="submit" disabled={isSavingBranch} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60">
+                  {isSavingBranch ? 'Saving branch…' : editingBranchId ? 'Update Branch' : 'Add Branch'}
+                </button>
+              </div>
+            </form>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500"><tr><th className="p-3">Company / VATIN</th><th className="p-3">Branch</th><th className="p-3">Location</th><th className="p-3">Numbering Series</th><th className="p-3 text-right">Actions</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {branches.length === 0 ? <tr><td colSpan={5} className="p-6 text-center text-slate-400">No operational branches configured. Add the first outlet above.</td></tr> : branches.map((branch) => (
+                    <tr key={branch.id}>
+                      <td className="p-3"><b className="block text-slate-900">{branch.company_name}</b><span className="font-mono text-[10px] text-emerald-700">{branch.company_vatin}</span></td>
+                      <td className="p-3"><b className="font-mono text-[#0d4f8b]">{branch.code}</b><span className="block font-bold text-slate-800">{branch.name}</span></td>
+                      <td className="p-3 text-slate-600">{branch.city}<span className="block max-w-[220px] text-[10px] text-slate-400">{branch.address}</span></td>
+                      <td className="p-3"><span className="block font-mono text-[10px] text-blue-800">INV: {branch.invoice_prefix}####{branch.invoice_suffix}</span><span className="block font-mono text-[10px] text-purple-800">CN: {branch.credit_note_prefix}####{branch.credit_note_suffix}</span></td>
+                      <td className="p-3 text-right"><button type="button" onClick={() => handleEditBranch(branch)} className="mr-2 rounded-lg border border-blue-200 px-2.5 py-1.5 font-bold text-blue-700"><Edit3 className="mr-1 inline h-3.5 w-3.5" />Edit</button><button type="button" onClick={() => handleDeleteBranch(branch)} className="rounded-lg border border-red-200 px-2.5 py-1.5 font-bold text-red-700"><Trash2 className="mr-1 inline h-3.5 w-3.5" />Delete</button></td>
                     </tr>
                   ))}
                 </tbody>

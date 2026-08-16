@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Entity, Invoice } from '../types';
+import { CompanyBranch, Entity, Invoice } from '../types';
 import { apiFetch, formatApiErrors } from '../lib/api';
 import { useConfirmation } from './ConfirmationDialog';
 import { validateOmanInvoice, OMAN_FIELDS } from '../lib/omanValidator';
@@ -75,6 +75,8 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   const [quickApiErrors, setQuickApiErrors] = useState<string[]>([]);
   const [isSavingQuickDocument, setIsSavingQuickDocument] = useState(false);
   const [issuerCompany, setIssuerCompany] = useState(() => selectedEntity !== 'group' ? selectedEntity : entities[0]?.id || '');
+  const [branches, setBranches] = useState<CompanyBranch[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState('');
   const isQuickB2C = quickDocumentType === '388';
   const isQuickSelfBilled = ['389', '261'].includes(quickDocumentType);
 
@@ -82,6 +84,26 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
     if (selectedEntity !== 'group') setIssuerCompany(selectedEntity);
     else if (!entities.some((entity) => entity.id === issuerCompany)) setIssuerCompany(entities[0]?.id || '');
   }, [selectedEntity, entities, issuerCompany]);
+
+  useEffect(() => {
+    if (!issuerCompany) {
+      setBranches([]);
+      setSelectedBranch('');
+      return;
+    }
+    void apiFetch<CompanyBranch[] | { results?: CompanyBranch[] }>(
+      `/api/branches?company=${encodeURIComponent(issuerCompany)}&page_size=100`
+    ).then((payload) => {
+      const loaded = Array.isArray(payload) ? payload : payload.results || [];
+      setBranches(loaded);
+      setSelectedBranch((current) => loaded.some((branch) => branch.id === current)
+        ? current : loaded[0]?.id || '');
+    }).catch((error) => {
+      setBranches([]);
+      setSelectedBranch('');
+      setQuickApiErrors(formatApiErrors(error, 'Operational branches could not be loaded.'));
+    });
+  }, [issuerCompany]);
 
   useEffect(() => {
     void apiFetch<Array<{ key: string; code: string; label: string; sublabel: string }>>('/api/document-types')
@@ -113,10 +135,16 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
   useEffect(() => {
     const company = entities.find((entity) => entity.id === issuerCompany);
     if (!company) return;
-    setQuickPrefix(company.invoicePrefix || 'INV-');
-    setQuickSuffix(company.invoiceSuffix || '');
-    setQuickSeq(String(company.nextInvoiceNumber || 1).padStart(4, '0'));
-  }, [entities, issuerCompany]);
+    const branch = branches.find((item) => item.id === selectedBranch);
+    const correction = ['381', '261'].includes(quickDocumentType);
+    setQuickPrefix(branch
+      ? (correction ? branch.credit_note_prefix : branch.invoice_prefix)
+      : company.invoicePrefix || 'INV-');
+    setQuickSuffix(branch
+      ? (correction ? branch.credit_note_suffix : branch.invoice_suffix)
+      : company.invoiceSuffix || '');
+    setQuickSeq(String(branch?.next_invoice_number || company.nextInvoiceNumber || 1).padStart(4, '0'));
+  }, [branches, entities, issuerCompany, quickDocumentType, selectedBranch]);
 
   const getQuickFullInvNumber = () => `${quickPrefix}${quickSeq}${quickSuffix}`;
   const [quickIssueDate, setQuickIssueDate] = useState(new Date().toISOString().split('T')[0]);
@@ -245,6 +273,7 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
       tt: quickDocumentType === '388' ? '11000000000000000000' : ['381', '383', '261'].includes(quickDocumentType) ? '10100000000000000000' : '10000000000000000000',
       cat: quickLines[0]?.vatCat || 'S 5%',
       ent: issuerCompany,
+      branch: selectedBranch || undefined,
       lines: formattedLines,
       b2c: quickDocumentType === '388'
     };
@@ -634,7 +663,8 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
       st_internal: 'DRAFT',
       tt: bitmapString,
       cat: itemCat === 'S' ? 'S 5%' : 'Z 0%',
-      ent: 'E1',
+      ent: issuerCompany,
+      branch: selectedBranch || undefined,
       lines: [[itemName, itemQty, `${itemPrice.toFixed(3)} OMR`, itemCat === 'S' ? 'S 5%' : 'Z 0%']] as [string, number, string, string][],
       b2c: docType === 'simplified'
     };
@@ -791,6 +821,29 @@ export const CreateInvoiceView: React.FC<CreateInvoiceViewProps> = ({ onSubmitIn
             </select>
             <p className="mt-1.5 text-[10px] text-slate-600">
               {isQuickSelfBilled ? 'This company is the buyer. The counterparty below is the supplier.' : 'Supplier name and VAT details are loaded from this company record.'}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-xs">
+            <label className="mb-1.5 block font-bold text-emerald-900">
+              Operational Branch / Outlet {branches.length ? '*' : '(company default)'}
+            </label>
+            <select
+              value={selectedBranch}
+              onChange={(event) => setSelectedBranch(event.target.value)}
+              required={branches.length > 0}
+              disabled={!issuerCompany || branches.length === 0}
+              className="w-full rounded-xl border border-emerald-200 bg-white p-2.5 font-bold text-slate-800 outline-none focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500"
+            >
+              <option value="">{branches.length ? 'Select branch' : 'No branches configured — use company numbering'}</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.code} — {branch.name} · {branch.invoice_prefix}####{branch.invoice_suffix}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[10px] text-slate-600">
+              Branches share the selected company VATIN and Peppol participant. Only the branch code and numbering series differ.
             </p>
           </div>
 

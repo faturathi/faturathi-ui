@@ -102,7 +102,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [otpCode, setOtpCode] = useState<string>('');
   const [otpError, setOtpError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [authMethod, setAuthMethod] = useState<'password' | 'email_otp'>('password');
+  const [mfaChallenge, setMfaChallenge] = useState<string>('');
 
   const handleRoleSelect = (usr: AuthUser) => {
     setSelectedRole(usr);
@@ -131,10 +131,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setIsLoggingIn(true);
     setLoginError(null);
     try {
-      const result = await apiFetch<any>(authMethod === 'password' ? '/api/auth/login' : '/api/auth/email-otp', {
-        method: 'POST', body: JSON.stringify(authMethod === 'password' ? { email, password } : { email })
+      const result = await apiFetch<any>('/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ email, password })
       });
       if (result.mfa_required) {
+        if (!result.mfa_challenge) {
+          throw new Error('The server did not issue a secure OTP challenge. Please try signing in again.');
+        }
+        setMfaChallenge(result.mfa_challenge);
         setAuthStep('mfa_otp');
         setOtpCode('');
         setOtpError(null);
@@ -154,7 +158,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     setOtpError(null);
     try {
       const result = await apiFetch<any>('/api/auth/mfa-verify', {
-        method: 'POST', body: JSON.stringify({ email, otp: otpCode })
+        method: 'POST', body: JSON.stringify({ email, otp: otpCode, mfa_challenge: mfaChallenge })
       });
       completeLogin(result);
     } catch (error) {
@@ -370,11 +374,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-xs font-bold">
-                    <button type="button" onClick={() => setAuthMethod('password')} className={`rounded-lg px-3 py-2 ${authMethod === 'password' ? 'bg-white text-[#0d4f8b] shadow-sm' : 'text-slate-500'}`}>Password + OTP</button>
-                    <button type="button" onClick={() => setAuthMethod('email_otp')} className={`rounded-lg px-3 py-2 ${authMethod === 'email_otp' ? 'bg-white text-[#0d4f8b] shadow-sm' : 'text-slate-500'}`}>Email OTP only</button>
-                  </div>
-                  {authMethod === 'password' && <div>
+                  <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold text-slate-700">
                         Password
@@ -408,7 +408,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                         {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
-                  </div>}
+                  </div>
 
                   {/* Remember Me Checkbox */}
                   <div className="flex items-center justify-between">
@@ -438,11 +438,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     {isLoggingIn ? (
                       <>
                         <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>{authMethod === 'password' ? 'Checking credentials…' : 'Sending email OTP…'}</span>
+                        <span>Checking credentials…</span>
                       </>
                     ) : (
                       <>
-                        <span>{authMethod === 'password' ? 'Login & Continue to OTP' : 'Send Email OTP'}</span>
+                        <span>Login &amp; Continue to OTP</span>
                         <ArrowRight className="h-4 w-4" />
                       </>
                     )}
@@ -459,7 +459,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setAuthStep('credentials')}
+                      onClick={() => {
+                        setMfaChallenge('');
+                        setOtpCode('');
+                        setAuthStep('credentials');
+                      }}
                       className="text-xs text-[#0d4f8b] hover:underline cursor-pointer font-bold"
                     >
                       Change Role

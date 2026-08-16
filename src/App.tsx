@@ -388,7 +388,6 @@ export default function App() {
     const invWithId: Invoice = {
       ...newInv,
       ent: newInv.ent || (selectedEntity === 'group' ? '' : selectedEntity),
-      branch: '100 — HQ Muscat',
       uuid: null
     };
 
@@ -537,31 +536,32 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans antialiased text-slate-900 selection:bg-blue-500 selection:text-white">
-      {/* Main Top Header */}
-      <Header
-        selectedEntity={selectedEntity}
-        onSelectEntity={setSelectedEntity}
-        showDocs={showDocs}
-        onToggleDocs={() => setShowDocs(!showDocs)}
-        onResetDb={handleResetDb}
-        isResetting={isResetting}
-        currentUser={currentUser}
-        onLogout={handleLogout}
-        onOpenCertModal={() => setIsCertModalOpen(true)}
-        certVerified={certVerified}
-        entities={visibleEntities}
-        companyGroups={companyGroups}
-        selectedGroup={selectedGroup}
-        onSelectGroup={handleSelectGroup}
-        onOpenAbout={() => setActiveTab('about')}
-      />
+      {/* Unified sticky application chrome: compact context header + navigation. */}
+      <div className="sticky top-0 z-50">
+        <Header
+          selectedEntity={selectedEntity}
+          onSelectEntity={setSelectedEntity}
+          showDocs={showDocs}
+          onToggleDocs={() => setShowDocs(!showDocs)}
+          onResetDb={handleResetDb}
+          isResetting={isResetting}
+          currentUser={currentUser}
+          onLogout={handleLogout}
+          onOpenCertModal={() => setIsCertModalOpen(true)}
+          certVerified={certVerified}
+          entities={visibleEntities}
+          companyGroups={companyGroups}
+          selectedGroup={selectedGroup}
+          onSelectGroup={handleSelectGroup}
+          onOpenAbout={() => setActiveTab('about')}
+        />
 
-      {/* Navbar Navigation */}
-      <Navbar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        roleMode={roleMode}
-      />
+        <Navbar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          roleMode={roleMode}
+        />
+      </div>
 
       {/* Secondary Cascade Sub-Tab Strip */}
       <SubNavTabStrip
