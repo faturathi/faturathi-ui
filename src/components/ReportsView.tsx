@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Database, ShieldCheck, FileSpreadsheet, Search, Filter, Printer, ArrowUpDown, ChevronLeft, ChevronRight, AlertCircle, CheckCircle2, Clock, FileText, SearchCheck, Calendar, RotateCcw, CalendarDays } from 'lucide-react';
-import { apiFetch, formatApiErrors, unwrapList } from '../lib/api';
+import { apiFetch, fetchAllPages, formatApiErrors } from '../lib/api';
+import { normalizeSystemLog, type ApiSystemLog, type SystemLogLevel } from '../lib/systemLogs';
 
 interface ReportsViewProps {
   activeTab?: string;
+  selectedEntity?: string;
+  selectedGroup?: string;
 }
 
 interface ReportRow {
@@ -39,7 +42,11 @@ interface BranchSummary {
   total: number;
 }
 
-export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) => {
+export const ReportsView: React.FC<ReportsViewProps> = ({
+  activeTab = 'rep',
+  selectedEntity = '',
+  selectedGroup = '',
+}) => {
   const isAuditLogs = activeTab === 'audit_logs';
 
   // State
@@ -108,7 +115,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [archivePurpose, setArchivePurpose] = useState('Regulatory audit / internal review');
 
   // System Logs Filter
-  const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4'>('ALL');
+  const [logLevel, setLogLevel] = useState<'ALL' | SystemLogLevel>('ALL');
 
   const [reportData, setReportData] = useState<ReportRow[]>([]);
   const [branchSummary, setBranchSummary] = useState<BranchSummary[]>([]);
@@ -119,10 +126,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    setIsLoading(true);
+    setLoadError('');
+    const scopedRequest: RequestInit = {
+      headers: {
+        'X-Company-ID': selectedEntity,
+        'X-Business-Group-ID': selectedGroup,
+      },
+    };
     void Promise.allSettled([
-      apiFetch<any[]>('/api/reports/tax-grid'),
-      apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100'),
-      apiFetch<BranchSummary[]>('/api/reports/branch-summary'),
+      apiFetch<any[]>('/api/reports/tax-grid', scopedRequest),
+      fetchAllPages<ApiSystemLog>('/api/config/logs?page_size=100', scopedRequest),
+      apiFetch<BranchSummary[]>('/api/reports/branch-summary', scopedRequest),
     ]).then(([reportResult, logResult, branchResult]) => {
       const errors: string[] = [];
       const rows = reportResult.status === 'fulfilled' ? reportResult.value : [];
@@ -155,17 +170,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
       })));
       setBranchSummary(branchResult.status === 'fulfilled' && Array.isArray(branchResult.value)
         ? branchResult.value : []);
-      setSystemLogs(unwrapList(logPayload).map((log) => ({
-        time: log.created_at,
-        level: String(log.detail?.level || '').toUpperCase() === 'WARNING' ? 'WARN'
-          : String(log.detail?.level || '').toUpperCase() || (log.action?.includes('ERROR') ? 'ERROR' : log.entity === 'Transmission' ? 'AS4' : 'INFO'),
+      setSystemLogs((Array.isArray(logPayload) ? logPayload : []).map(normalizeSystemLog).map((log) => ({
+        time: log.timestamp,
+        level: log.level,
         src: log.entity || 'API',
-        msg: String(log.detail?.message || `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`),
+        msg: log.message,
       })));
       setLoadError(errors.join(' '));
     }).catch((error) => setLoadError(formatApiErrors(error, 'Reports and audit logs could not be loaded.').join(' ')))
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [selectedEntity, selectedGroup]);
 
   // Filtering & Sorting
   const filteredData = reportData.filter((row) => {
@@ -825,7 +839,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
               <option value="INFO">INFO</option>
               <option value="WARN">WARN</option>
               <option value="ERROR">ERROR</option>
-              <option value="AS4">AS4 Transmissions</option>
+              <option value="AUDIT">AUDIT</option>
+              <option value="TRANSMISSION">Transmission / AS4</option>
             </select>
           </div>
         </div>
@@ -843,7 +858,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ activeTab = 'rep' }) =
                       ? 'bg-red-500 text-white'
                       : log.level === 'WARN'
                       ? 'bg-amber-500 text-slate-950'
-                      : log.level === 'AS4'
+                      : log.level === 'TRANSMISSION'
                       ? 'bg-purple-500 text-white'
                       : 'bg-emerald-600 text-white'
                   }`}

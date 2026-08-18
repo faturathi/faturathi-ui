@@ -18,7 +18,10 @@ import {
   ShieldCheck, 
   FileText,
   Radio,
-  Sparkles
+  Sparkles,
+  Download,
+  BarChart3,
+  CalendarDays
 } from 'lucide-react';
 
 interface ApiInvoicesViewProps {
@@ -51,6 +54,9 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected' | 'query'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [vendorFilter, setVendorFilter] = useState('ALL');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   
   // Local state for actions
   const [acceptedInvoices, setAcceptedInvoices] = useState<Record<string, string>>({});
@@ -120,12 +126,17 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
     if (activeFilter === 'accepted' && !status.label.includes('Accepted')) return false;
     if (activeFilter === 'rejected' && !status.label.includes('Rejected')) return false;
     if (activeFilter === 'query' && !status.label.includes('Hold')) return false;
+    if (vendorFilter !== 'ALL' && inv.cp !== vendorFilter) return false;
+    if (dateFrom && inv.d < dateFrom) return false;
+    if (dateTo && inv.d > dateTo) return false;
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return (
         inv.n.toLowerCase().includes(q) ||
         inv.cp.toLowerCase().includes(q) ||
+        inv.cpv.toLowerCase().includes(q) ||
+        String(inv.branchCode || inv.branchName || inv.branch || '').toLowerCase().includes(q) ||
         (inv.uuid && inv.uuid.toLowerCase().includes(q))
       );
     }
@@ -202,6 +213,29 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
   const acceptedCount = apInvoices.filter(i => getStatusBadge(i).label.includes('Accepted')).length;
   const rejectedCount = apInvoices.filter(i => getStatusBadge(i).label.includes('Rejected')).length;
   const queryCount = apInvoices.filter(i => getStatusBadge(i).label.includes('Hold')).length;
+  const vendors = Array.from(new Set(apInvoices.map((invoice) => invoice.cp).filter(Boolean))).sort();
+  const visibleNet = filteredInvoices.reduce((total, invoice) => total + Number(invoice.net || 0), 0);
+  const visibleVat = filteredInvoices.reduce((total, invoice) => total + Number(invoice.vat || 0), 0);
+  const visibleGross = visibleNet + visibleVat;
+
+  const handleExportCsv = () => {
+    const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const header = ['Invoice Number', 'Date', 'Time', 'Vendor', 'Vendor VATIN', 'Branch', 'Net OMR', 'VAT OMR', 'Gross OMR', 'PINT Status', 'ERP Action Status'];
+    const rows = filteredInvoices.map((invoice) => [
+      invoice.n, invoice.d, invoice.t, invoice.cp, invoice.cpv,
+      invoice.branchCode || invoice.branchName || invoice.branch || 'Company default',
+      Number(invoice.net || 0).toFixed(3), Number(invoice.vat || 0).toFixed(3),
+      (Number(invoice.net || 0) + Number(invoice.vat || 0)).toFixed(3),
+      invoice.st, getStatusBadge(invoice).label,
+    ]);
+    const csv = [header, ...rows].map((row) => row.map(escape).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `AP_Invoices_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6">
@@ -244,7 +278,8 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
       </div>
 
       {/* Control Bar: Filter Tabs + Search */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         {/* Filter Buttons */}
         <div className="flex flex-wrap items-center gap-1.5 text-xs w-full md:w-auto">
           <button
@@ -308,7 +343,7 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
         </div>
 
         {/* Search Field */}
-        <div className="relative w-full md:w-64">
+        <div className="relative w-full xl:w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             type="text"
@@ -318,6 +353,34 @@ export const ApiInvoicesView: React.FC<ApiInvoicesViewProps> = ({
             className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-blue-500 focus:bg-white transition-all"
           />
         </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr_1fr_auto_auto] gap-2 border-t border-slate-100 pt-3 text-xs">
+          <select value={vendorFilter} onChange={(event) => setVendorFilter(event.target.value)} aria-label="Filter AP invoices by vendor" className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-700">
+            <option value="ALL">All vendors</option>
+            {vendors.map((vendor) => <option key={vendor} value={vendor}>{vendor}</option>)}
+          </select>
+          <label className="relative"><CalendarDays className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" /><input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-label="AP invoice date from" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-2" /></label>
+          <label className="relative"><CalendarDays className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" /><input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-label="AP invoice date to" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-2" /></label>
+          <button type="button" onClick={() => { setSearchQuery(''); setVendorFilter('ALL'); setDateFrom(''); setDateTo(''); setActiveFilter('all'); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-600 hover:bg-slate-50">Clear filters</button>
+          <button type="button" onClick={handleExportCsv} disabled={filteredInvoices.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0d4f8b] px-4 py-2 font-bold text-white disabled:opacity-50"><Download className="h-4 w-4" />Export CSV</button>
+        </div>
+      </div>
+
+      {/* Basic AP reporting follows the active filters, so exported and displayed totals agree. */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {[
+          ['Documents', String(filteredInvoices.length), 'text-blue-700'],
+          ['Vendors', String(new Set(filteredInvoices.map((invoice) => invoice.cp)).size), 'text-indigo-700'],
+          ['Net AP Value', maskAmounts ? '••••••' : `${visibleNet.toFixed(3)} OMR`, 'text-slate-900'],
+          ['Input VAT', maskAmounts ? '••••••' : `${visibleVat.toFixed(3)} OMR`, 'text-emerald-700'],
+          ['Gross Payable', maskAmounts ? '••••••' : `${visibleGross.toFixed(3)} OMR`, 'text-[#0d4f8b]'],
+        ].map(([label, value, color]) => (
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
+            <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500"><BarChart3 className="h-3.5 w-3.5" />{label}</span>
+            <b className={`mt-1 block text-sm font-black font-mono ${color}`}>{value}</b>
+          </div>
+        ))}
       </div>
 
       {/* Inbound Invoices List / Grid Table */}

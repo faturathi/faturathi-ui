@@ -117,7 +117,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     return {
       ...selectedRole, id: user.id, n: user.name || user.email, e: user.email,
       email: user.email, r: user.role, role: user.role, ent: user.entityId || 'ALL',
-      branch: user.branch, mappedRoleMode: roleMap[user.role] || 'ops',
+      branch: user.branch, designation: user.designation || '', mappedRoleMode: roleMap[user.role] || 'ops',
     };
   };
 

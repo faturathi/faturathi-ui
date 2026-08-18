@@ -248,7 +248,9 @@ export default function App() {
   const [isResetting, setIsResetting] = useState<boolean>(false);
 
   // Certificate & Pre-Landing Security State
-  const [isCertVerifiedPreLanding, setIsCertVerifiedPreLanding] = useState<boolean>(() => localStorage.getItem('faturathi.certProceed') === 'true');
+  // Certificate presence is intentionally checked on every full portal load. Keeping the
+  // bypass in localStorage made the security gate disappear permanently after one demo skip.
+  const [isCertVerifiedPreLanding, setIsCertVerifiedPreLanding] = useState<boolean>(false);
   const [isCertModalOpen, setIsCertModalOpen] = useState<boolean>(false);
   const [certVerified, setCertVerified] = useState<boolean>(true);
 
@@ -273,6 +275,7 @@ export default function App() {
         const restored: AuthUser = {
           id: user.id, n: user.name || user.email, e: user.email, r: user.role,
           ent: user.entityId || 'ALL', st: 'Active', ll: 'Current session',
+          designation: user.designation || '',
           roleCategory: user.role === 'APPROVER' ? 'finance_mgr' : user.role === 'MAKER' ? 'normal_user' : 'portal_admin',
           roleTitle: user.role === 'APPROVER' ? 'Accountant / Finance Manager' : user.role === 'MAKER' ? 'Normal App User' : 'Admin / Manager for Portal',
           roleBadge: user.role === 'APPROVER' ? 'Finance Approver' : user.role === 'MAKER' ? 'Invoice Operations' : 'Portal Administrator',
@@ -323,6 +326,10 @@ export default function App() {
   };
 
   const fetchTenantContext = async () => {
+    // Do not let a group removed by an administrator keep poisoning discovery calls.
+    // The API will still restrict these requests to the authenticated user's scope.
+    setActiveCompany('');
+    setActiveBusinessGroup('');
     const [entityPayload, groupPayload] = await Promise.all([
       apiFetch<Entity[] | { results?: Entity[] }>('/api/entities?page_size=100'),
       apiFetch<CompanyGroup[] | { results?: CompanyGroup[] }>('/api/company-groups?page_size=100')
@@ -336,10 +343,16 @@ export default function App() {
     setCompanyGroups(nextGroups);
     const groupId = selectedGroup && nextGroups.some((group) => group.id === selectedGroup)
       ? selectedGroup : nextGroups[0]?.id || '';
+    const companiesInGroup = groupId
+      ? nextEntities.filter((entity) => groupId === 'standalone' ? !entity.company_group : entity.company_group === groupId)
+      : nextEntities;
+    const entityId = selectedEntity !== 'group' && companiesInGroup.some((entity) => entity.id === selectedEntity)
+      ? selectedEntity
+      : companiesInGroup[0]?.id || nextEntities[0]?.id || 'group';
     setSelectedGroup(groupId);
     setActiveBusinessGroup(groupId);
-    setSelectedEntity('group');
-    setActiveCompany('group');
+    setSelectedEntity(entityId);
+    setActiveCompany(entityId);
     setTenantContextLoaded(true);
   };
 
@@ -365,6 +378,10 @@ export default function App() {
   const visibleEntities = selectedGroup
     ? entities.filter((entity) => selectedGroup === 'standalone' ? !entity.company_group : entity.company_group === selectedGroup)
     : entities;
+
+  const configCompanyId = selectedEntity !== 'group'
+    ? selectedEntity
+    : visibleEntities[0]?.id || entities[0]?.id || '';
 
   const handleSelectGroup = (groupId: string) => {
     setSelectedGroup(groupId);
@@ -522,12 +539,12 @@ export default function App() {
     fetchInvoices();
   };
 
-  if (authInitializing) {
-    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm text-sm font-semibold text-slate-700">Restoring your secure session…</div></div>;
+  if (!isCertVerifiedPreLanding) {
+    return <PreLandingCertChecker onProceed={() => setIsCertVerifiedPreLanding(true)} />;
   }
 
-  if (!isCertVerifiedPreLanding) {
-    return <PreLandingCertChecker onProceed={() => { localStorage.setItem('faturathi.certProceed', 'true'); setIsCertVerifiedPreLanding(true); }} />;
+  if (authInitializing) {
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><div className="rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm text-sm font-semibold text-slate-700">Restoring your secure session…</div></div>;
   }
 
   if (!currentUser) {
@@ -649,10 +666,16 @@ export default function App() {
         )}
 
         {/* Tab 8: Reconciliation */}
-        {activeTab === 'rec' && <ReconciliationView />}
+        {activeTab === 'rec' && <ReconciliationView invoices={invoices} maskAmounts={maskAmounts} />}
 
         {/* Tab 9: Reports & Archive & Audit Logs */}
-        {(activeTab === 'rep' || activeTab === 'audit_logs') && <ReportsView activeTab={activeTab} />}
+        {(activeTab === 'rep' || activeTab === 'audit_logs') && (
+          <ReportsView
+            activeTab={activeTab}
+            selectedEntity={selectedEntity}
+            selectedGroup={selectedGroup}
+          />
+        )}
 
         {/* Tab 10: Onboarding & SMP */}
         {activeTab === 'onb' && <OnboardingView />}
@@ -673,7 +696,14 @@ export default function App() {
             activeTab={activeTab}
             onTabChange={setActiveTab}
             onEntitiesChanged={fetchTenantContext}
-            isPlatformAdmin={currentUser?.roleCategory === 'superadmin'}
+            isPlatformAdmin={currentUser?.r === 'SUPERADMIN' || currentUser?.role === 'SUPERADMIN'}
+            canManageErpConfig={
+              currentUser?.r === 'SUPERADMIN' || currentUser?.role === 'SUPERADMIN'
+              || /technical|support|dealer/i.test(currentUser?.designation || '')
+            }
+            selectedEntity={selectedEntity}
+            selectedGroup={selectedGroup}
+            configCompanyId={configCompanyId}
           />
         )}
 

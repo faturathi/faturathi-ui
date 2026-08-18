@@ -69,6 +69,31 @@ export function unwrapList<T>(payload: T[] | { results?: T[] }): T[] {
   return Array.isArray(payload?.results) ? payload.results : [];
 }
 
+interface PaginatedResponse<T> {
+  results?: T[];
+  next?: string | null;
+}
+
+/** Load every DRF page while remaining compatible with endpoints returning plain arrays. */
+export async function fetchAllPages<T>(path: string, init: RequestInit = {}): Promise<T[]> {
+  const rows: T[] = [];
+  let next: string | null = path;
+  let pageCount = 0;
+
+  while (next && pageCount < 100) {
+    const payload: T[] | PaginatedResponse<T> = await apiFetch<T[] | PaginatedResponse<T>>(next, init);
+    if (Array.isArray(payload)) {
+      rows.push(...payload);
+      break;
+    }
+    rows.push(...(Array.isArray(payload.results) ? payload.results : []));
+    next = payload.next || null;
+    pageCount += 1;
+  }
+
+  return rows;
+}
+
 export type ApiFieldErrors = Record<string, string[]>;
 
 function flattenMessages(value: unknown, prefix = ''): string[] {
@@ -110,8 +135,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, retryAut
   const storage = authStorage();
   const token = storage?.getItem(ACCESS_TOKEN_KEY);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  if (activeCompany) headers.set('X-Company-ID', activeCompany);
-  if (activeBusinessGroup) headers.set('X-Business-Group-ID', activeBusinessGroup);
+  if (activeCompany && !headers.has('X-Company-ID')) headers.set('X-Company-ID', activeCompany);
+  if (activeBusinessGroup && !headers.has('X-Business-Group-ID')) {
+    headers.set('X-Business-Group-ID', activeBusinessGroup);
+  }
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }

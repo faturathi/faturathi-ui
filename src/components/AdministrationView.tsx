@@ -6,8 +6,10 @@ import {
   Plus, Edit3, Trash2, Key, Globe, Database, FileText, Check, Copy, RefreshCw, Eye, EyeOff,
   Calendar, Clock, RotateCcw
 } from 'lucide-react';
-import { apiFetch, getApiFieldErrors, unwrapList, type ApiFieldErrors } from '../lib/api';
+import { apiFetch, fetchAllPages, getApiFieldErrors, unwrapList, type ApiFieldErrors } from '../lib/api';
+import { normalizeSystemLog, type ApiSystemLog, type SystemLogLevel } from '../lib/systemLogs';
 import { useConfirmation } from './ConfirmationDialog';
+import { ErpDeliveryConfigPanel } from './ErpDeliveryConfigPanel';
 
 interface AdministrationViewProps {
   roleMode: RoleMode;
@@ -21,6 +23,10 @@ interface AdministrationViewProps {
   onTabChange?: (tab: string) => void;
   onEntitiesChanged?: () => Promise<void>;
   isPlatformAdmin?: boolean;
+  selectedEntity?: string;
+  selectedGroup?: string;
+  configCompanyId?: string;
+  canManageErpConfig?: boolean;
 }
 
 export const AdministrationView: React.FC<AdministrationViewProps> = ({
@@ -34,12 +40,17 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   activeTab = 'adm',
   onTabChange,
   onEntitiesChanged,
-  isPlatformAdmin = false
+  isPlatformAdmin = false,
+  selectedEntity = '',
+  selectedGroup = '',
+  configCompanyId = '',
+  canManageErpConfig = false
 }) => {
   const [confirmAction, confirmationDialog] = useConfirmation();
   // Local active subtab fallback if not controlled externally
   const [internalTab, setInternalTab] = useState<string>(activeTab);
   const currentTab = activeTab || internalTab;
+  const [companySetupTab, setCompanySetupTab] = useState<'COMPANY' | 'ERP'>('COMPANY');
 
   const handleTabSwitch = (tab: string) => {
     setInternalTab(tab);
@@ -382,11 +393,13 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   // ---------------- SYSTEM LOGS STATE ----------------
   const [logCategory, setLogCategory] = useState<'all' | 'user' | 'ota_peppol' | 'server' | 'errors'>('all');
   const [logSearch, setLogSearch] = useState('');
-  const [logLevel, setLogLevel] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR' | 'AS4' | 'AUDIT'>('ALL');
+  const [logLevel, setLogLevel] = useState<'ALL' | SystemLogLevel>('ALL');
   const [fromDateTime, setFromDateTime] = useState('');
   const [toDateTime, setToDateTime] = useState('');
 
-  const [systemLogs, setSystemLogs] = useState<any[]>([
+  // The legacy examples remain below only as design-time reference; the false branch is
+  // eliminated by the production build and the rendered table starts empty until the API responds.
+  const [systemLogs, setSystemLogs] = useState<any[]>(false ? [
     {
       id: 'LOG-9945',
       timestamp: '2026-08-02 00:35:10',
@@ -517,20 +530,18 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
       message: 'User permission updated to Finance Manager with posting rights',
       details: 'Granted by admin@iis-oman.om'
     }
-  ]);
+  ] : []);
 
   useEffect(() => {
-    void apiFetch<any[] | { results?: any[] }>('/api/config/logs?page_size=100').then((payload) => setSystemLogs(unwrapList(payload).map((log) => ({
-      id: log.id,
-      timestamp: log.created_at,
-      category: log.entity === 'Transmission' ? 'ota_peppol' : log.action?.includes('ERROR') ? 'errors' : 'user',
-      level: log.entity === 'Transmission' ? 'AS4' : log.action?.includes('ERROR') ? 'ERROR' : 'AUDIT',
-      entity: log.entity,
-      user: log.user_email || 'System',
-      message: `${log.action}${log.entity_id ? ` — ${log.entity_id}` : ''}`,
-      details: JSON.stringify(log.detail || {}),
-    })))).catch((error) => console.warn('System log loading failed:', error));
-  }, []);
+    setSystemLogs([]);
+    void fetchAllPages<ApiSystemLog>('/api/config/logs?page_size=100', {
+      headers: {
+        'X-Company-ID': selectedEntity,
+        'X-Business-Group-ID': selectedGroup,
+      },
+    }).then((rows) => setSystemLogs(rows.map(normalizeSystemLog)))
+      .catch((error) => console.warn('System log loading failed:', error));
+  }, [selectedEntity, selectedGroup]);
 
   const filteredLogs = systemLogs.filter(log => {
     const matchesCategory = logCategory === 'all' || log.category === logCategory;
@@ -618,9 +629,20 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   const [webhookUrl, setWebhookUrl] = useState('https://api.faturathi.om/v1/webhooks/inbound');
   const [apiKey, setApiKey] = useState('fat_live_9988223344556677889900aabbcc');
   const [showKey, setShowKey] = useState(false);
+  const [configLoadError, setConfigLoadError] = useState('');
 
   useEffect(() => {
-    void apiFetch<any>('/api/config').then((config) => {
+    if (!configCompanyId) {
+      setConfigLoadError('Select an active company to view its general configuration.');
+      return;
+    }
+    setConfigLoadError('');
+    void apiFetch<any>('/api/config', {
+      headers: {
+        'X-Company-ID': configCompanyId,
+        'X-Business-Group-ID': selectedGroup,
+      },
+    }).then((config) => {
       setGenCountry(config.country);
       setGenTimeZone(config.timezone);
       setGenCurrency(config.base_currency);
@@ -637,12 +659,20 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
       setAdminAlertContact(config.admin_alert_contact);
       setNotificationEmails((config.notification_emails || []).join(', '));
       setApiKey(config.master_api_key || 'Not configured');
-    }).catch((error) => console.warn('Configuration loading failed:', error));
-  }, []);
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Configuration loading failed.';
+      setConfigLoadError(message);
+      console.warn('Configuration loading failed:', error);
+    });
+  }, [configCompanyId, selectedGroup]);
 
   const saveGeneralConfig = async () => {
     try {
-      await apiFetch('/api/config', { method: 'PATCH', body: JSON.stringify({
+      if (!configCompanyId) throw new Error('Select an active company before saving its configuration.');
+      await apiFetch('/api/config', { method: 'PATCH', headers: {
+        'X-Company-ID': configCompanyId,
+        'X-Business-Group-ID': selectedGroup,
+      }, body: JSON.stringify({
         country: genCountry, timezone: genTimeZone, base_currency: genCurrency,
         fx_rate_usd: genFxRate, language_mode: genLanguage === 'en-ar' ? 'EN_AR_BILINGUAL' : genLanguage.toUpperCase(),
         mfa_enforced: enableMfa, security_alerts: enableAlerts, admin_alerts: enableAdminAlerts,
@@ -660,6 +690,11 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
   return (
     <div className="space-y-6 animate-fadeIn">
       {confirmationDialog}
+      {configLoadError ? (
+        <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          {configLoadError}
+        </div>
+      ) : null}
       {/* Top Section Header */}
       <div>
         <h2 className="text-xl font-bold text-[#0d4f8b] flex items-center justify-between">
@@ -1010,6 +1045,13 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
       {/* TAB 3: SETUP COMPANY & LEGAL ENTITIES */}
       {currentTab === 'sys_setup' && (
         <div className="space-y-6">
+          <div className="grid grid-cols-1 gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xs sm:grid-cols-2" role="tablist" aria-label="Company setup sections">
+            <button type="button" role="tab" aria-selected={companySetupTab === 'COMPANY'} onClick={() => setCompanySetupTab('COMPANY')} className={`rounded-xl px-4 py-3 text-left text-xs font-bold transition-all ${companySetupTab === 'COMPANY' ? 'bg-[#0d4f8b] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}><Building2 className="mr-2 inline h-4 w-4" />Company, VAT Groups &amp; Operational Branches</button>
+            <button type="button" role="tab" aria-selected={companySetupTab === 'ERP'} onClick={() => setCompanySetupTab('ERP')} className={`rounded-xl px-4 py-3 text-left text-xs font-bold transition-all ${companySetupTab === 'ERP' ? 'bg-gradient-to-r from-[#0d4f8b] to-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}><Server className="mr-2 inline h-4 w-4" />AP Invoice → Customer ERP Configuration</button>
+          </div>
+
+          {companySetupTab === 'COMPANY' ? (
+          <>
           {/* Tax Registration Mode Box */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
             <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
@@ -1460,6 +1502,16 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
               </div>
             </form>
           </div>
+          </>
+          ) : (
+            <ErpDeliveryConfigPanel
+              companyId={configCompanyId}
+              selectedGroup={selectedGroup}
+              entities={entities}
+              branches={branches}
+              canManage={canManageErpConfig}
+            />
+          )}
         </div>
       )}
 
@@ -1597,7 +1649,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                     <option value="INFO">INFO</option>
                     <option value="WARN">WARN</option>
                     <option value="ERROR">ERROR</option>
-                    <option value="AS4">AS4 Transmission</option>
+                    <option value="TRANSMISSION">Transmission / AS4</option>
                     <option value="AUDIT">AUDIT</option>
                   </select>
                 </div>
@@ -1662,7 +1714,7 @@ export const AdministrationView: React.FC<AdministrationViewProps> = ({
                               ? 'bg-red-100 text-red-800'
                               : log.level === 'WARN'
                               ? 'bg-amber-100 text-amber-800'
-                              : log.level === 'AS4'
+                              : log.level === 'TRANSMISSION'
                               ? 'bg-blue-100 text-blue-900'
                               : log.level === 'AUDIT'
                               ? 'bg-purple-100 text-purple-900'

@@ -121,6 +121,30 @@ export interface CompanyBranch {
   is_active: boolean;
 }
 
+export interface ErpDeliveryConfig {
+  id: string;
+  company: string;
+  company_name: string;
+  branch: string | null;
+  branch_code: string;
+  branch_name: string;
+  name: string;
+  base_url: string;
+  endpoint_path: string;
+  http_method: 'POST' | 'PUT' | 'PATCH';
+  auth_type: 'NONE' | 'BEARER' | 'API_KEY' | 'BASIC' | 'OAUTH2';
+  auth_header_name: string;
+  username: string;
+  custom_headers: Record<string, string>;
+  payload_template: Record<string, unknown>;
+  timeout_seconds: number;
+  is_active: boolean;
+  token_configured: boolean;
+  curl_preview: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface User {
   id: string;
   n: string; // Name
@@ -132,6 +156,7 @@ export interface User {
   fontRole?: string;
   email?: string;
   role?: string;
+  designation?: string;
   branch?: string;
   mfa?: boolean;
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ShieldCheck, ShieldAlert, Cpu, CheckCircle2, Lock, ArrowRight, RefreshCw, Terminal, Laptop, Key } from 'lucide-react';
 import { FaturathiLogo, NetbueLogo } from './Logos';
 
@@ -10,38 +10,45 @@ export const PreLandingCertChecker: React.FC<PreLandingCertCheckerProps> = ({ on
   const [scanStep, setScanStep] = useState<'scanning' | 'warning' | 'verified'>('scanning');
   const [progress, setProgress] = useState<number>(15);
   const [showLogDetails, setShowLogDetails] = useState<boolean>(false);
+  const timers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+
+  const clearScanTimers = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  };
+
+  const schedule = (callback: () => void, delay: number) => {
+    timers.current.push(setTimeout(callback, delay));
+  };
 
   useEffect(() => {
-    const timer1 = setTimeout(() => setProgress(55), 400);
-    const timer2 = setTimeout(() => setProgress(88), 800);
-    const timer3 = setTimeout(() => {
+    schedule(() => setProgress(55), 400);
+    schedule(() => setProgress(88), 800);
+    schedule(() => {
       setProgress(100);
       // Default to warning since no client cert installed on workstation
       setScanStep('warning');
     }, 1200);
-
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-    };
+    return clearScanTimers;
   }, []);
 
   const handleReScan = () => {
+    clearScanTimers();
     setScanStep('scanning');
     setProgress(20);
-    setTimeout(() => setProgress(70), 500);
-    setTimeout(() => {
+    schedule(() => setProgress(70), 500);
+    schedule(() => {
       setProgress(100);
       setScanStep('warning');
     }, 1100);
   };
 
   const handleSimulateCertFound = () => {
+    clearScanTimers();
     setScanStep('scanning');
     setProgress(30);
-    setTimeout(() => setProgress(80), 400);
-    setTimeout(() => {
+    schedule(() => setProgress(80), 400);
+    schedule(() => {
       setProgress(100);
       setScanStep('verified');
     }, 800);
@@ -96,7 +103,7 @@ export const PreLandingCertChecker: React.FC<PreLandingCertCheckerProps> = ({ on
                       ? 'text-blue-800 bg-blue-50 border-blue-200'
                       : 'text-emerald-800 bg-emerald-50 border-emerald-200'
                   }`}>
-                    {scanStep === 'scanning' ? 'SCANNING SYSTEM KEYSTORE' : 'CERTIFICATE VERIFIED'}
+                    {scanStep === 'scanning' ? 'SCANNING SYSTEM KEYSTORE' : scanStep === 'verified' ? 'CERTIFICATE VERIFIED' : 'CERTIFICATE NOT FOUND'}
                   </span>
                   <span className="text-[11px] font-mono text-slate-500 font-semibold">OTA Peppol mTLS</span>
                 </div>
@@ -124,7 +131,7 @@ export const PreLandingCertChecker: React.FC<PreLandingCertCheckerProps> = ({ on
                 <Cpu className="h-4 w-4 text-emerald-600" />
                 {scanStep === 'scanning'
                   ? 'Querying Windows Certificate Store / macOS Keychain...'
-                  : 'System Certificate Match Found & Handshake Complete'}
+                  : scanStep === 'verified' ? 'System Certificate Match Found & Handshake Complete' : 'System Keystore Check Complete — Client Certificate Missing'}
               </span>
               <span className="text-emerald-700 font-bold">{progress}%</span>
             </div>
